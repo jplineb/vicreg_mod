@@ -29,7 +29,7 @@ def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
 
     # Data
-    parser.add_argument("--data-dir", type=Path, default="/path/to/imagenet", required=True,
+    parser.add_argument("--data-dir", type=Path, default="/zfs/wficai/radimagenet/imagenet_fmt", required=True,
                         help='Path to the image net dataset')
 
     # Checkpoints
@@ -47,7 +47,7 @@ def get_arguments():
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
                         help='Number of epochs')
-    parser.add_argument("--batch-size", type=int, default=2048,
+    parser.add_argument("--batch-size", type=int, default=32,
                         help='Effective batch size (per worker batch size is [batch-size] / world-size)')
     parser.add_argument("--base-lr", type=float, default=0.2,
                         help='Base learning rate, effective learning after warmup is [base-lr] * [batch-size] / 256')
@@ -73,6 +73,9 @@ def get_arguments():
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist-url', default='env://',
                         help='url used to set up distributed training')
+    
+    # Modification to args because we only have one gpu
+    parser.add_argument('--rank', default=0, type=int)
 
     return parser
 
@@ -82,7 +85,6 @@ def main(args):
     init_distributed_mode(args)
     print(args)
     gpu = torch.device(args.device)
-
     if args.rank == 0:
         args.exp_dir.mkdir(parents=True, exist_ok=True)
         stats_file = open(args.exp_dir / "stats.txt", "a", buffering=1)
@@ -92,7 +94,7 @@ def main(args):
     transforms = aug.TrainTransform()
 
     dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
+    # sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
     loader = torch.utils.data.DataLoader(
@@ -100,12 +102,12 @@ def main(args):
         batch_size=per_device_batch_size,
         num_workers=args.num_workers,
         pin_memory=True,
-        sampler=sampler,
+        # sampler=sampler,
     )
 
     model = VICReg(args).cuda(gpu)
-    model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+    # model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
     optimizer = LARS(
         model.parameters(),
         lr=0,
@@ -127,7 +129,7 @@ def main(args):
     start_time = last_logging = time.time()
     scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, args.epochs):
-        sampler.set_epoch(epoch)
+        # sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
@@ -312,15 +314,19 @@ class FullGatherLayer(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x):
-        output = [torch.zeros_like(x) for _ in range(dist.get_world_size())]
-        dist.all_gather(output, x)
+        # output = [torch.zeros_like(x) for _ in range(dist.get_world_size())]
+        output = [torch.zeros_like(x) for _ in range(1)]
+        # dist.all_gather(output, x)
         return tuple(output)
+        # x = tuple(x)
+        # return (x)
 
     @staticmethod
     def backward(ctx, *grads):
         all_gradients = torch.stack(grads)
-        dist.all_reduce(all_gradients)
-        return all_gradients[dist.get_rank()]
+        # dist.all_reduce(all_gradients)
+        # return all_gradients[dist.get_rank()]
+        return all_gradients
 
 
 def handle_sigusr1(signum, frame):

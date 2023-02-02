@@ -1,0 +1,4 @@
+.ipynb_checkpoints/
+.vscode/settings.json
+*.pyc
+exp/
