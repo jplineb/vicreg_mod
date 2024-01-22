@@ -147,6 +147,7 @@ def main_worker(gpu, args):
             "backbone_learning_rate": args.lr_backbone,
             "head_learning_rate": args.lr_head,
             "weight_decay": args.weight_decay,
+            "args.batch_size": args.batch_size,
             "dataset": "chexpert",
             "epochs": args.epochs,
             "backbone_weights": args.weights,
