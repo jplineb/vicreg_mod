@@ -29,14 +29,21 @@ import resnet
 
 from custom_datasets import Chexpert
 
+
 def get_arguments():
     parser = argparse.ArgumentParser(
         description="Evaluate a pretrained model on ImageNet"
     )
 
     # Checkpoint
-    parser.add_argument("--pretrained_path", default=None, type=Path, help="path to pretrained model")
-    parser.add_argument("--resume", action="store_true", help="Continue from previous epoch if crash occurs")
+    parser.add_argument(
+        "--pretrained_path", default=None, type=Path, help="path to pretrained model"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue from previous epoch if crash occurs",
+    )
     parser.add_argument(
         "--exp-dir",
         default="./checkpoint/unfrozen_chexpert_AP_PA/",
@@ -51,8 +58,18 @@ def get_arguments():
     # Model
     parser.add_argument("--arch", type=str, default="resnet50")
     parser.add_argument("--slice", type=int, default=8)
-    parser.add_argument("--pretrained-how", type=str, choices=['VICReg', 'Shallow', 'Frank'], required=True)
-    parser.add_argument("--pretrained-dataset", type=str, choices=['ImageNet', 'RadImageNet'], required=True)
+    parser.add_argument(
+        "--pretrained-how",
+        type=str,
+        choices=["VICReg", "Shallow", "Frank"],
+        required=True,
+    )
+    parser.add_argument(
+        "--pretrained-dataset",
+        type=str,
+        choices=["ImageNet", "RadImageNet"],
+        required=True,
+    )
 
     # Optim
     parser.add_argument(
@@ -103,7 +120,7 @@ def get_arguments():
 
 
 def main():
-    # Enable garbage collector  
+    # Enable garbage collector
     gc.collect(True)
     print("YOU ARE TRAINING ON CHEXPERT USING THE CHEXPERT DATASET CLASS")
     parser = get_arguments()
@@ -116,7 +133,7 @@ def main():
     args.rank = 0
     args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
     args.world_size = args.ngpus_per_node
-    
+
     main_worker(torch.cuda.current_device(), args)
 
 
@@ -136,10 +153,10 @@ def main_worker(gpu, args):
             "pretrained_how": args.pretrained_how,
             "pretrained_dataset": args.pretrained_dataset,
             "backbone": args.weights,
-            "pretraining_path" : args.pretrained_path,
+            "pretraining_path": args.pretrained_path,
             "resume": args.resume,
         },
-        resume = args.resume
+        resume=args.resume,
     )
 
     if args.rank == 0:
@@ -150,63 +167,71 @@ def main_worker(gpu, args):
 
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
-    
+
     # Decide whether to load ImageNet pretrained using pytorch models or load local resnet arch
     if args.pretrained_how == "Shallow":
         from torchvision.models import resnet50
+
         print("Loading Pretrained ResNet50 Model (Shallow Learned)")
-                
+
         if args.pretrained_dataset == "ImageNet":
             # Load ImageNet Pretrained model
             from torchvision.models import ResNet50_Weights
+
             # Use built-in methods for loading model
             print("Initializing ResNet50 Model with ImageNet Weights")
             backbone = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
             backbone.fc = nn.Identity()
-            
+
         elif args.pretrained_dataset == "RadImageNet":
             print("Initializing ResNet50 Model with RadImageNet Weights")
             # Raise an error if user doesn't specify the path
             if args.pretrained_path is None:
-                raise(f"Must specify pretrained path for {args.pretrained_dataset=}")
+                raise (f"Must specify pretrained path for {args.pretrained_dataset=}")
             # Load model weights from checkpoing
-            pretrained_state_dict = torch.load(args.pretrained_path, map_location='cpu')
+            pretrained_state_dict = torch.load(args.pretrained_path, map_location="cpu")
             # Load weights into model
-            backbone = resnet50(weights=pretrained_state_dict['model'])
+            backbone = resnet50(weights=pretrained_state_dict["model"])
             backbone.fc = nn.Identity()
-            
+
         # Freeze ResNet backbone weights if specified
         # backbone = nn.Sequential(OrderedDict([*(list(model.named_children())[:-1])]))
         if args.weights == "freeze":
             print("Freezing ResNet50 pretrained backbone weights")
             print("Are you sure you should be doing this??")
             backbone.requires_grad_(False)
-        
+
         # Define head classifier for task
-        head = nn.Linear(2048, 13) # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
-        
+
         # Swap out the linear classifier on the pretrained ImageNet Model with ours
         model = nn.Sequential(backbone, head)
         model.cuda(gpu)
-    
+
     elif args.pretrained_path is not None and args.pretrained_how == "Frank":
         print("Loading Frankenstein Model using pretrained ImageNet and RadImageNet")
-        wandb.config['slice_location'] = args.slice
-        
+        wandb.config["slice_location"] = args.slice
+
         # Load ImageNet Pretrained model
         from torchvision.models import resnet50, ResNet50_Weights
-        
+
         imagenet_model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
-        
+
         ## Slice it up
         imagenet_slice_location = args.slice
-        imagenet_slice = nn.Sequential(OrderedDict([*(list(imagenet_model.named_children())[:imagenet_slice_location])]))
-        
+        imagenet_slice = nn.Sequential(
+            OrderedDict(
+                [*(list(imagenet_model.named_children())[:imagenet_slice_location])]
+            )
+        )
+
         # Load up VICReg model code
-        radimagenet_model, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+        radimagenet_model, embedding = resnet.__dict__[args.arch](
+            zero_init_residual=True
+        )
         state_dict = torch.load(args.pretrained_path, map_location="cpu")
         if "model" in state_dict:
             print("Loading model from state_dict")
@@ -216,16 +241,26 @@ def main_worker(gpu, args):
                 for (key, value) in state_dict.items()
             }
             radimagenet_model.load_state_dict(state_dict, strict=False)
-        
+
         ## Slice it up
         radimagenet_slice_location = args.slice + 1
-        radimagenet_slice = nn.Sequential(OrderedDict([*(list(radimagenet_model.named_children())[radimagenet_slice_location:])]))
-        
+        radimagenet_slice = nn.Sequential(
+            OrderedDict(
+                [
+                    *(
+                        list(radimagenet_model.named_children())[
+                            radimagenet_slice_location:
+                        ]
+                    )
+                ]
+            )
+        )
+
         # Put two models together
         backbone = nn.Sequential(imagenet_slice, radimagenet_slice)
-        
+
         # Define head classifier for task
-        head = nn.Linear(2048, 13) # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
@@ -233,21 +268,21 @@ def main_worker(gpu, args):
         # Swap out the linear classifier on the pretrained ImageNet Model with ours
         model = nn.Sequential(backbone, nn.Flatten(), head)
         model.cuda(gpu)
-        
+
         if args.weights == "freeze":
             backbone.requires_grad_(False)
             head.requires_grad_(True)
-        
+
     elif args.pretrained_how == "VICReg":
         print("Loading local VICReg ResNet50 arch Model")
         # Load VICReg paper version of ResNet50
         backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
 
         # state_dict = torch.load(args.pretrained, map_location="cpu")
-        
+
         # If pretrained model is provided, load the weights
         if args.pretrained_path is not None:
-            wandb.config['pretraining'] = "Pretrained RadImageNet"
+            wandb.config["pretraining"] = "Pretrained RadImageNet"
             print(f"loading pretrained model from {args.pretrained_path}")
             state_dict = torch.load(args.pretrained_path, map_location="cpu")
             if "model" in state_dict:
@@ -259,10 +294,10 @@ def main_worker(gpu, args):
                 }
             backbone.load_state_dict(state_dict, strict=False)
         else:
-            wandb.config['pretraining'] = "Randomly Initialized"
+            wandb.config["pretraining"] = "Randomly Initialized"
 
         print("Modifying model with linear layer")
-        head = nn.Linear(embedding, 13) # modify to number of labels (here its 13)
+        head = nn.Linear(embedding, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         model = nn.Sequential(backbone, head)
@@ -271,13 +306,13 @@ def main_worker(gpu, args):
         if args.weights == "freeze":
             backbone.requires_grad_(False)
             head.requires_grad_(True)
-    
+
     else:
-        raise(f"{args.pretrained_how} is not correctly selected")
-    
+        raise (f"{args.pretrained_how} is not correctly selected")
+
     # Watch the model with wandb
     wandb.watch(model)
-    
+
     param_groups = [dict(params=head.parameters(), lr=args.lr_head)]
     if args.weights == "finetune":
         param_groups.append(dict(params=backbone.parameters(), lr=args.lr_backbone))
@@ -289,7 +324,7 @@ def main_worker(gpu, args):
         print("Resuming from checkpoint")
         ckpt = torch.load(args.exp_dir / "checkpoint.pth", map_location="cpu")
         start_epoch = ckpt["epoch"]
-        wandb.config['start_epoch'] = start_epoch # log start epoch
+        wandb.config["start_epoch"] = start_epoch  # log start epoch
         print(f"Continuing from epoch {start_epoch}")
         best_auc = ckpt["best_auc"]
         model.load_state_dict(ckpt["model"])
@@ -304,19 +339,25 @@ def main_worker(gpu, args):
         batch_size=args.batch_size,
         num_workers=args.workers,
         transforms_pytorch="RGB",
-        gpu=gpu
-        )
+        gpu=gpu,
+    )
     train_loader = chexpert_ds.get_dataloader(split="train")
     val_loader = chexpert_ds.get_dataloader(split="valid")
     """
     NOTE: here we are going to define the pathologies we care about for benchmark comparions
     - The model is not training on these, just reporting results
     """
-    pathologies_of_interest = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Effusion"]
+    pathologies_of_interest = [
+        "Atelectasis",
+        "Cardiomegaly",
+        "Consolidation",
+        "Edema",
+        "Effusion",
+    ]
     start_time = time.time()
     for epoch in range(start_epoch, args.epochs):
         print("Begining training")
-        
+
         # train
         # TODO: CHECK HERE! Should weights be frozen??
         if args.weights == "finetune":
@@ -325,18 +366,15 @@ def main_worker(gpu, args):
             model.eval()
         else:
             assert False
-                    
-        for step, data in enumerate(
-            train_loader, start=epoch * len(train_loader)
-        ):
 
+        for step, data in enumerate(train_loader, start=epoch * len(train_loader)):
             # print(f"data len: {len(data)}")
             # print(f"data type: {type(data)}")
             # print(data)
-            images = data['img']
+            images = data["img"]
             # print(images.size())
-            target = data['lab']
-            
+            target = data["lab"]
+
             output = model(images.cuda(gpu, non_blocking=True))
             # loss = criterion(output, target.cuda(gpu, non_blocking=True))
             loss = chexpert_ds.calculate_loss(predictions=output, targets=target)
@@ -345,10 +383,6 @@ def main_worker(gpu, args):
             loss.backward()
             optimizer.step()
             if step % args.print_freq == 0:
-                """
-                NOTE: TRYING TO DISABLE MULTI GPU HERE FOR THE TIME BEING
-                """
-                # torch.distributed.reduce(loss.div_(args.world_size), 0)
                 if args.rank == 0:
                     pg = optimizer.param_groups
                     lr_head = pg[0]["lr"]
@@ -372,7 +406,7 @@ def main_worker(gpu, args):
         if args.rank == 0:
             # Keep track of total accuracy
             print(f"Starting Eval {datetime.now()}")
-            
+
             all_outputs = []
             all_targets = []
             all_patient_ids = []
@@ -380,8 +414,8 @@ def main_worker(gpu, args):
 
             with torch.no_grad():
                 for data in val_loader:
-                    images = data['img']
-                    target = data['lab']
+                    images = data["img"]
+                    target = data["lab"]
                     patient_ids = data["patientid"]
                     views = data["view"]
                     output = model(images.cuda(gpu, non_blocking=True))
@@ -395,40 +429,43 @@ def main_worker(gpu, args):
                     all_views += views
                     all_patient_ids += patient_ids
 
-            all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = chexpert_ds.calculate_auc(all_outputs, all_targets)
-            # all_results = chexpert_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)     
+            (
+                all_auc,
+                avg_auc_all,
+                avg_auc_of_interest,
+                auc_dict,
+            ) = chexpert_ds.calculate_auc(all_outputs, all_targets)
+            # all_results = chexpert_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
             stats = dict(
                 epoch=epoch,
-                all_auc = auc_dict,
-                avg_auc = avg_auc_all.tolist(),
-                avg_auc_of_interest = avg_auc_of_interest,
+                all_auc=auc_dict,
+                avg_auc=avg_auc_all.tolist(),
+                avg_auc_of_interest=avg_auc_of_interest,
             )
-            wandb.log({
-                "epoch": epoch,
-                **auc_dict,
-                "avg_auc": stats["avg_auc"],
-                "avg_auc_of_interest": stats["avg_auc_of_interest"]
-            }
+            wandb.log(
+                {
+                    "epoch": epoch,
+                    **auc_dict,
+                    "avg_auc": stats["avg_auc"],
+                    "avg_auc_of_interest": stats["avg_auc_of_interest"],
+                }
             )
             print(json.dumps(stats))
             print(json.dumps(stats), file=stats_file)
-            
+
             # Clean up. Maybe memory problem here?
-            del(all_outputs)
-            del(all_targets)
-            del(all_patient_ids)
-            del(all_views)
+            del all_outputs
+            del all_targets
+            del all_patient_ids
+            del all_views
 
         scheduler.step()
         if args.rank == 0:
-            """
-            TODO: Insert model saving behavior here
-            """
             # best_auc = max(all_auc).to_list()
             state = dict(
                 epoch=epoch + 1,
-                all_auc = all_auc.tolist(),
-                best_auc = avg_auc_all.tolist(),
+                all_auc=all_auc.tolist(),
+                best_auc=avg_auc_all.tolist(),
                 model=model.state_dict(),
                 optimizer=optimizer.state_dict(),
                 scheduler=scheduler.state_dict(),
