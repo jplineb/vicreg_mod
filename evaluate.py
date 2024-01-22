@@ -42,7 +42,7 @@ def get_arguments():
     parser.add_argument("--pretrained", type=Path, help="path to pretrained model")
     parser.add_argument(
         "--exp-dir",
-        default="./checkpoint/lincls/",
+        default="./checkpoint/lincls_2/",
         type=Path,
         metavar="DIR",
         help="path to checkpoint directory",
