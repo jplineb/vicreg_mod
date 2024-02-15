@@ -54,6 +54,7 @@ def get_arguments():
     parser.add_argument(
         "--print-freq", default=100, type=int, metavar="N", help="print frequency"
     )
+    parser.add_argument("--run-id", type=str, required=False)
 
     # Model
     parser.add_argument("--arch", type=str, default="resnet50")
@@ -61,7 +62,7 @@ def get_arguments():
     parser.add_argument(
         "--pretrained-how",
         type=str,
-        choices=["VICReg", "Shallow", "Frank"],
+        choices=["VICReg", "Supervised", "Frank"],
         required=True,
     )
     parser.add_argument(
@@ -155,7 +156,6 @@ def main_worker(gpu, args):
             "pretrained_dataset": args.pretrained_dataset,
             "backbone": args.weights,
             "pretraining_path": args.pretrained_path,
-            "resume": args.resume,
         },
         resume=args.resume,
     )
@@ -170,10 +170,10 @@ def main_worker(gpu, args):
     torch.backends.cudnn.benchmark = True
 
     # Decide whether to load ImageNet pretrained using pytorch models or load local resnet arch
-    if args.pretrained_how == "Shallow":
+    if args.pretrained_how == "Supervised":
         from torchvision.models import resnet50
 
-        print("Loading Pretrained ResNet50 Model (Shallow Learned)")
+        print("Loading Pretrained ResNet50 Model (Supervised Learned)")
 
         if args.pretrained_dataset == "ImageNet":
             # Load ImageNet Pretrained model
@@ -360,7 +360,6 @@ def main_worker(gpu, args):
         print("Begining training")
 
         # train
-        # TODO: CHECK HERE! Should weights be frozen??
         if args.weights == "finetune":
             model.train()
         elif args.weights == "freeze":
@@ -379,7 +378,6 @@ def main_worker(gpu, args):
             output = model(images.cuda(gpu, non_blocking=True))
             # loss = criterion(output, target.cuda(gpu, non_blocking=True))
             loss = chexpert_ds.calculate_loss(predictions=output, targets=target)
-            # print(f"Loss for this run {loss}")
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -401,6 +399,10 @@ def main_worker(gpu, args):
                     print(gc.get_stats())
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
+                                       
+            # Garbage Clean up
+            del images
+            del target
 
         # evaluate
         model.eval()
@@ -473,6 +475,7 @@ def main_worker(gpu, args):
             )
             torch.save(state, args.exp_dir / "checkpoint.pth")
             # wandb.log_artifact(model)
+    wandb.finish()
 
 
 def handle_sigusr1(signum, frame):
