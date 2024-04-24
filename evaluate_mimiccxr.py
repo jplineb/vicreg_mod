@@ -27,7 +27,7 @@ import numpy as np
 
 import resnet
 
-from custom_datasets import Chexpert
+from custom_datasets import MIMIC_CXR
 
 
 def get_arguments():
@@ -156,6 +156,7 @@ def main_worker(gpu, args):
             "pretrained_dataset": args.pretrained_dataset,
             "backbone": args.weights,
             "pretraining_path": args.pretrained_path,
+            "task_ds": "mimiccxr",
         },
         resume=args.resume,
     )
@@ -203,7 +204,7 @@ def main_worker(gpu, args):
             backbone.requires_grad_(False)
 
         # Define head classifier for task
-        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 14)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
@@ -261,7 +262,7 @@ def main_worker(gpu, args):
         backbone = nn.Sequential(imagenet_slice, radimagenet_slice)
 
         # Define head classifier for task
-        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 14)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
@@ -298,7 +299,7 @@ def main_worker(gpu, args):
             wandb.config["pretraining"] = "Randomly Initialized"
 
         print("Modifying model with linear layer")
-        head = nn.Linear(embedding, 13)  # modify to number of labels (here its 13)
+        head = nn.Linear(embedding, 14)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         model = nn.Sequential(backbone, head)
@@ -336,14 +337,13 @@ def main_worker(gpu, args):
         start_epoch = 0
         best_auc = None
     print(f"Creating dataset with batchsize {args.batch_size}")
-    chexpert_ds = Chexpert(
+    mimiccxr_ds = MIMIC_CXR(
         batch_size=args.batch_size,
         num_workers=args.workers,
-        transforms_pytorch="RGB",
         gpu=gpu,
     )
-    train_loader = chexpert_ds.get_dataloader(split="train")
-    val_loader = chexpert_ds.get_dataloader(split="valid")
+    train_loader = mimiccxr_ds.get_dataloader(split="train")
+    val_loader = mimiccxr_ds.get_dataloader(split="valid")
     """
     NOTE: here we are going to define the pathologies we care about for benchmark comparions
     - The model is not training on these, just reporting results
@@ -377,7 +377,7 @@ def main_worker(gpu, args):
 
             output = model(images.cuda(gpu, non_blocking=True))
             # loss = criterion(output, target.cuda(gpu, non_blocking=True))
-            loss = chexpert_ds.calculate_loss(predictions=output, targets=target)
+            loss = mimiccxr_ds.calculate_loss(predictions=output, targets=target)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -419,8 +419,8 @@ def main_worker(gpu, args):
                 for data in val_loader:
                     images = data["img"]
                     target = data["lab"]
-                    patient_ids = data["patientid"]
-                    views = data["view"]
+                    # patient_ids = data["patientid"]
+                    # views = data["view"]
                     output = model(images.cuda(gpu, non_blocking=True))
                     # Map outputs to range of 0-1
                     outputs = torch.sigmoid(output).cpu()
@@ -429,16 +429,16 @@ def main_worker(gpu, args):
                     # Append to list of all outputs
                     all_outputs += outputs
                     all_targets += target.cpu()
-                    all_views += views
-                    all_patient_ids += patient_ids
+                    # all_views += views
+                    # all_patient_ids += patient_ids
 
             (
                 all_auc,
                 avg_auc_all,
                 avg_auc_of_interest,
                 auc_dict,
-            ) = chexpert_ds.calculate_auc(all_outputs, all_targets)
-            # all_results = chexpert_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
+            ) = mimiccxr_ds.calculate_auc(all_outputs, all_targets)
+            # all_results = mimiccxr_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
             stats = dict(
                 epoch=epoch,
                 all_auc=auc_dict,
@@ -459,8 +459,8 @@ def main_worker(gpu, args):
             # Clean up. Maybe memory problem here?
             del all_outputs
             del all_targets
-            del all_patient_ids
-            del all_views
+            # del all_patient_ids
+            # del all_views
 
         scheduler.step()
         if args.rank == 0:

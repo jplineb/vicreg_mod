@@ -432,7 +432,8 @@ def main_worker(gpu, args):
                     # Append to list of all outputs
                     all_outputs += outputs.cpu()
                     all_targets += target.cpu()
-                    all_valid_loss += valid_loss
+                    # import pdb; pdb.set_trace()
+                    all_valid_loss.append(valid_loss.item())
                     # all_views += views
                     # all_patient_ids += patient_ids
             # Calculate metrics on validation set
