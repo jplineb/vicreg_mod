@@ -119,11 +119,22 @@ def get_arguments():
 
     return parser
 
+def caclulate_gradients(model):
+    
+    grad_avgs = {
+                "layer1.0.conv1.grad": abs(model[0].layer1.get_submodule('0').conv1.weight.grad).mean().item(),
+                "layer2.0.conv1.grad": abs(model[0].layer2.get_submodule('0').conv1.weight.grad).mean().item(),
+                "layer3.0.conv1.grad": abs(model[0].layer3.get_submodule('0').conv1.weight.grad).mean().item(),
+                "layer4.0.conv1.grad": abs(model[0].layer4.get_submodule('0').conv1.weight.grad).mean().item(),
+                "linear_classifier": abs(model[1].weight.grad).mean().item(),
+                                }
+    
+    return grad_avgs
 
 def main():
     # Enable garbage collector
     gc.collect(True)
-    print("YOU ARE TRAINING ON CHEXPERT USING THE CHEXPERT DATASET CLASS")
+    print("YOU ARE TRAINING ON VINDRCXR USING THE VINDRCXR DATASET CLASS")
     parser = get_arguments()
     args = parser.parse_args()
     args.ngpus_per_node = torch.cuda.device_count()
@@ -204,7 +215,7 @@ def main_worker(gpu, args):
             backbone.requires_grad_(False)
 
         # Define head classifier for task
-        head = nn.Linear(2048, 14)  # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
@@ -262,7 +273,7 @@ def main_worker(gpu, args):
         backbone = nn.Sequential(imagenet_slice, radimagenet_slice)
 
         # Define head classifier for task
-        head = nn.Linear(2048, 14)  # modify to number of labels (here its 13)
+        head = nn.Linear(2048, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         head.requires_grad_(True)
@@ -299,7 +310,7 @@ def main_worker(gpu, args):
             wandb.config["pretraining"] = "Randomly Initialized"
 
         print("Modifying model with linear layer")
-        head = nn.Linear(embedding, 14)  # modify to number of labels (here its 13)
+        head = nn.Linear(embedding, 13)  # modify to number of labels (here its 13)
         head.weight.data.normal_(mean=0.0, std=0.01)
         head.bias.data.zero_()
         model = nn.Sequential(backbone, head)
@@ -313,12 +324,13 @@ def main_worker(gpu, args):
         raise (f"{args.pretrained_how} is not correctly selected")
 
     # Watch the model with wandb
-    wandb.watch(model)
+    wandb.watch(backbone)
 
     param_groups = [dict(params=head.parameters(), lr=args.lr_head)]
     if args.weights == "finetune":
         param_groups.append(dict(params=backbone.parameters(), lr=args.lr_backbone))
-    optimizer = optim.SGD(param_groups, 0, momentum=0.9, weight_decay=args.weight_decay)
+    # optimizer = optim.SGD(param_groups, 0, momentum=0.9, weight_decay=args.weight_decay)
+    optimizer = optim.Adam(param_groups, 0, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
 
     # automatically resume from checkpoint if it exists
@@ -368,16 +380,27 @@ def main_worker(gpu, args):
             assert False
 
         for step, data in enumerate(train_loader, start=epoch * len(train_loader)):
-            # print(f"data len: {len(data)}")
-            # print(f"data type: {type(data)}")
-            # print(data)
             images = data["img"]
-            # print(images.size())
             target = data["lab"]
 
             output = model(images.cuda(gpu, non_blocking=True))
-            # loss = criterion(output, target.cuda(gpu, non_blocking=True))
             loss = vindrcxr_ds.calculate_loss(predictions=output, targets=target)
+            # import pdb; pdb.set_trace()
+            # Extract layer weights
+            grad_avgs = {}
+            if step % args.print_freq == 0:
+                grad_avgs = {}
+                try:
+                    if args.weights == "finetune":
+                        grad_avgs = caclulate_gradients(model)
+                    else:
+                        grad_avgs = {
+                            "linear_classifier": abs(model[1].weight.grad).mean().item(),
+                            }
+                except Exception as e:
+                    # import pdb; pdb.set_trace
+                    print(e)
+                
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -393,6 +416,7 @@ def main_worker(gpu, args):
                         lr_head=lr_head,
                         loss=loss.item(),
                         time=int(time.time() - start_time),
+                        **grad_avgs
                     )
                     wandb.log(stats)
                     # Find garbage
@@ -432,7 +456,6 @@ def main_worker(gpu, args):
                     # Append to list of all outputs
                     all_outputs += outputs.cpu()
                     all_targets += target.cpu()
-                    # import pdb; pdb.set_trace()
                     all_valid_loss.append(valid_loss.item())
                     # all_views += views
                     # all_patient_ids += patient_ids
@@ -445,13 +468,13 @@ def main_worker(gpu, args):
             ) = vindrcxr_ds.calculate_auc(all_outputs, all_targets)
             # all_results = vindrcxr_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
             ## Calculate validation loss
-            avg_valid_loss = np.average(all_valid_loss)
+            # avg_valid_loss = np.average(all_valid_loss)
             stats = dict(
                 epoch=epoch,
                 all_auc=auc_dict,
                 avg_auc=avg_auc_all.tolist(),
                 avg_auc_of_interest=avg_auc_of_interest,
-                validation_loss = avg_valid_loss
+                # validation_loss = avg_valid_loss
             )
             wandb.log(
                 {
@@ -459,7 +482,7 @@ def main_worker(gpu, args):
                     **auc_dict,
                     "avg_auc": stats["avg_auc"],
                     "avg_auc_of_interest": stats["avg_auc_of_interest"],
-                    "validation_loss": stats["validation_loss"]
+                    # "validation_loss": stats["validation_loss"]
                 }
             )
             print(json.dumps(stats))

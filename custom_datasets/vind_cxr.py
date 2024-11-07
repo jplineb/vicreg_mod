@@ -69,36 +69,22 @@ class VINDR_CXR_BASE(VisionDataset):
 
     # Dataset information.
     label_columns = [
-        "Aortic enlargement", # Enlarged Cardiomediastinum
+        "Aortic enlargement",  # Enlarged Cardiomediastinum
         "Cardiomegaly",
         "Lung Opacity",
-        "Lung cyst", # Lung Lesion
-        "Edema",
+        "Lung cyst",  # Lung Lesion
+        "Pulmonary fibrosis",  # Edema
         "Consolidation",
         "Pneumonia",
         "Atelectasis",
         "Pneumothorax",
         "Pleural effusion",
-        "Pleural thickening", # Plueral Other
-        "Rib fracture", # Fracture
-        "Tuberculosis", # Support Devices
+        "Pleural thickening",  # Plueral Other
+        "Rib fracture",  # Fracture
+        "Tuberculosis",  # Support Devices
     ]
-    
-    # self.pathologies = ["Enlarged Cardiomediastinum",
-    #                         "Cardiomegaly",
-    #                         "Lung Opacity",
-    #                         "Lung Lesion",
-    #                         "Edema",
-    #                         "Consolidation",
-    #                         "Pneumonia",
-    #                         "Atelectasis",
-    #                         "Pneumothorax",
-    #                         "Pleural Effusion",
-    #                         "Pleural Other",
-    #                         "Fracture",
-    #                         "Support Devices"]
 
-    NUM_CLASSES = 14  # 14 total: len(self.CHEXPERT_LABELS_IDX)
+    NUM_CLASSES = 13  # 14 total: len(self.CHEXPERT_LABELS_IDX)
     INPUT_SIZE = (224, 224)
     PATCH_SIZE = (16, 16)
     IN_CHANNELS = 1
@@ -120,23 +106,27 @@ class VINDR_CXR_BASE(VisionDataset):
         if build_index is True:
             self.build_index()
         else:
-            metadata = pd.read_csv(
+            index_file = pd.read_csv(
                 os.path.join(self.root, f"annotations/image_labels_{self.split}.csv")
             )
-            index_file = metadata
 
-            index_file['fname'] = np.array(
-                    index_file["image_id"].apply(
-                        lambda x: os.path.join(self.root, f"{self.split}/jpegs/{x}.jpg")
-                    )
+            index_file["fname"] = np.array(
+                index_file["image_id"].apply(
+                    lambda x: os.path.join(self.root, f"{self.split}/jpegs/{x}.jpg")
                 )
-            
-            self.index_file = index_file
-            index_file.fnames = glob.glob(
-                os.path.join(self.root, self.split + "/" + "jpegs") + "/*.jpg"
             )
-            self.index_file = index_file
+
+            # index_file.fnames = glob.glob(
+            #     os.path.join(self.root, self.split + "/" + "jpegs") + "/*.jpg"
+            # )
+
+            # Drop duplicates, assume first is ground truth
+            # self.index_file = self.index_file.drop_duplicates(
+            #     subset=["fname"], keep="first"
+            # )
             
+            # Drop duplicates, use majority vote
+            self.index_file = index_file.groupby(by=["fname"]).mean().round().reset_index()
 
     def read_dicom(self, file_path: str, imsize: int):
         """Read pixel array from a DICOM file and apply recale and resize
@@ -217,7 +207,7 @@ class VINDR_CXR_BASE(VisionDataset):
 
     def __getitem__(self, index: int) -> Any:
         df_row = self.index_file.iloc[index]
-        fname = df_row['fname']
+        fname = df_row["fname"]
         image = Image.open(os.path.join(self.root, fname)).convert("L")
         img = self.TRANSFORMS(image)
 
@@ -276,20 +266,20 @@ class VINDR_CXR:
         self.path = path_to_vindcxr
 
         self.pathologies = [
-                "Aortic enlargement", # Enlarged Cardiomediastinum
-                "Cardiomegaly",
-                "Lung Opacity",
-                "Lung cyst", # Lung Lesion
-                "Edema",
-                "Consolidation",
-                "Pneumonia",
-                "Atelectasis",
-                "Pneumothorax",
-                "Pleural effusion",
-                "Pleural thickening", # Plueral Other
-                "Rib fracture", # Fracture
-                "Tuberculosis", # Support Devices
-    ]
+            "Aortic enlargement",  # Enlarged Cardiomediastinum
+            "Cardiomegaly",
+            "Lung Opacity",
+            "Lung cyst",  # Lung Lesion
+            "Pulmonary fibrosis",  # Edema
+            "Consolidation",
+            "Pneumonia",
+            "Atelectasis",
+            "Pneumothorax",
+            "Pleural effusion",
+            "Pleural thickening",  # Plueral Other
+            "Rib fracture",  # Fracture
+            "Tuberculosis",  # Support Devices
+        ]
 
         self.pathologies_of_interest = [
             "Atelectasis",

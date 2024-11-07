@@ -8,6 +8,9 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.datasets.utils import extract_archive
 from torchvision.datasets.vision import VisionDataset
+from torch import nn
+
+from torchmetrics import AUROC
 
 
 def any_exist(files):
@@ -47,7 +50,7 @@ CHEXPERT_LABELS = {
 }
 
 
-class MIMIC_CXR(VisionDataset):
+class MIMIC_CXR_BASE(VisionDataset):
     '''A dataset class for the MIMIC-CXR dataset (https://physionet.org/content/mimic-cxr/2.0.0/).
     Note that you must register and manually download the data to use this dataset.
     '''
@@ -79,12 +82,17 @@ class MIMIC_CXR(VisionDataset):
         if build_index == True:
             self.build_index()
         else:
-            index_file = pd.read_csv(f"index_file_{self.split}.csv")
+            index_file = pd.read_csv(self.root + f"index_file_{self.split}.csv")
+            LABELS_COL = index_file.columns.get_loc("Atelectasis")
+            end_col = LABELS_COL + len(CHEXPERT_LABELS)
+            self.labels = index_file.iloc[:, range(LABELS_COL, end_col)].values
+            self.labels = np.maximum(self.labels, 0)  # convert -1 (unknown) to 0
             self.fnames = index_file['fnames'].values
             
         self.TRANSFORMS = transforms.Compose(
             [
                 transforms.Resize(self.INPUT_SIZE[0] - 1, max_size=self.INPUT_SIZE[0]),
+                transforms.Grayscale(3), # John Paul added this
                 transforms.ToTensor(),
                 transforms.Normalize([0.4721], [0.3025])
             ]
@@ -219,6 +227,9 @@ class MIMIC_CXR(VisionDataset):
         fname = self.fnames[index]
         image = Image.open(os.path.join(self.root, fname)).convert("L")
         img = self.TRANSFORMS(image)
+        
+        sample = {}
+        sample["idx"] = index
 
         _, h, w = np.array(img).shape
         if h > w:
@@ -235,7 +246,11 @@ class MIMIC_CXR(VisionDataset):
             pad1, pad2 = dim_gap // 2, (dim_gap + (dim_gap % 2)) // 2
             img = transforms.Pad((0, pad1, 0, pad2))(img)
         label = torch.tensor(self.labels[index][self.CHEXPERT_LABELS_IDX]).long()
-        return index, img.float(), label
+        
+        sample["lab"] = label
+        sample['img'] = img.float()
+        
+        return sample
 
     @staticmethod
     def num_classes():
@@ -246,3 +261,121 @@ class MIMIC_CXR(VisionDataset):
         return [
             Input2dSpec(input_size=MIMIC_CXR.INPUT_SIZE, patch_size=MIMIC_CXR.PATCH_SIZE, in_channels=MIMIC_CXR.IN_CHANNELS),
         ]
+        
+class MIMIC_CXR:
+        
+    def __init__(self, path_to_mimiccxr:str = "/project/dane2/wficai/BenchMD/mimiccxr/", batch_size:int=64, num_workers:int = 4, gpu = None):
+        self.data_loader_spec = dict(
+            batch_size=batch_size, num_workers=num_workers, pin_memory=True
+        )
+        self.gpu = gpu
+        self.path = path_to_mimiccxr
+        
+        self.pathologies = [
+            "Atelectasis", "Enlarged Cardiomediastinum", 'Cardiomegaly',
+            'Lung Opacity', 'Lung Lesion', 'Edema',
+            'Consolidation', 'Pneumonia', 'Atelectasis',
+            'Pneumothorax', 'Pleural Effusion', 'Pleural Other',
+            'Fracture', 'Support Devices',]
+        
+        self.pathologies_of_interest = ["Atelectasis", "Enlarged Cardiomediastinum", 'Cardiomegaly']
+        
+    def get_dataset(self, split="train"):
+        if split == "train":
+            d_cxr = MIMIC_CXR_BASE(self.path, build_index=False, download=False, train=True)
+        if split == "valid":
+            d_cxr = MIMIC_CXR_BASE(self.path, build_index=False, download=False, train=False)
+        print(f"length of dataset {split}: {len(d_cxr)}")
+        
+        return d_cxr
+    
+    def get_dataloader(
+        self, split="train", distributed=False
+    ) -> torch.utils.data.DataLoader:
+        """
+        Return dataloader given a certain split
+        """
+        print(f"Fetching dataloader for {split} split")
+        if distributed:
+            if split != "train":
+                print(f"Probably shouldn't use {split} for distrbuted training")
+                raise NotImplementedError
+            else:
+                dataset = self.get_dataset(split=split)
+                train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+                dataloader = torch.utils.data.DataLoader(
+                    train_sampler, **self.data_loader_spec
+                )
+                return dataloader, train_sampler
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                self.get_dataset(split=split), **self.data_loader_spec
+            )
+
+        return dataloader
+    
+    def check_dataloader(self, split="train"):
+        print(next(iter(self.get_dataloader(split=split))))
+
+    def calculate_loss(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        targets = targets.nan_to_num(0)
+        loss_func = nn.BCEWithLogitsLoss().cuda(self.gpu)
+        loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).float())
+        return loss
+    
+    def calculate_accuracy(self, outputs: torch.Tensor, targets: torch.Tensor):
+        '''
+        https://discuss.pytorch.org/t/how-to-calculate-accuracy-for-multi-label-classification/94906/2
+        NOTE: Had to implement in code (ie. not used right now)
+        '''
+        outputs = torch.sigmoid(outputs).cpu()
+        predicted = np.round(outputs)
+        return predicted
+    
+    def calculate_auc(self, outputs, targets):
+        # Calculate metrics
+        """
+        NOTE: setting average = None allows us to see score for every label
+        https://torchmetrics.readthedocs.io/en/stable/classification/auroc.html
+        """
+        # Calculate AUROC for the whole stack
+        au_roc = AUROC(task="multilabel", num_labels=14, average=None)
+        au_roc_average = AUROC(task="multilabel", num_labels=14)
+        auc_calc_all = au_roc(torch.stack(outputs), torch.stack(targets).int())
+        auc_roc_avg_all = au_roc_average(torch.stack(outputs), torch.stack(targets).int())
+        
+        # # Get the AUROCs of interest
+        auc_dict = {}
+        auc_of_interest = []
+        for pathology, auc in zip(self.pathologies, auc_calc_all.tolist()):
+            # Store in master dict
+            auc_dict[pathology] = auc
+            # If AUC in pathologies of interest put them in list
+            if pathology in self.pathologies_of_interest:
+                auc_of_interest.append(auc)
+        
+        # Get average of AUROC of interest
+        auc_of_avg_interest = 0
+        
+        return auc_calc_all, auc_roc_avg_all, auc_of_avg_interest, auc_dict
+    
+    def store_round_results(self, outputs, targets, views, patient_ids):
+        au_roc = AUROC(task="multilabel", num_labels=14, average=None)
+        
+        all_results = []
+        for output, target, view, patient_id in zip(outputs, targets, views, patient_ids):
+            
+            auc_calc = au_roc(output, target)
+            # Create a dict for each row
+            results = dict(
+                patient_id = patient_id,
+                view = view
+            )
+            # Loop and store in results
+            for pathology, auc in zip(self.pathologies, auc_calc):
+                results[pathology] = auc
+            
+            all_results.append(results)
+        
+        return all_results
+        

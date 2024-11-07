@@ -21,7 +21,7 @@ class Chexpert:
         1: Positive mention -> 1
         nan: no mention -> 0
     """ 
-    path_to_chexpert = "/zfs/wficai/chexpert/chexpertchestxrays-u20210408/"
+    path_to_chexpert = "/project/dane2/wficai/chexpert/chexpertchestxrays-u20210408/"
 
     def __init__(
         self,

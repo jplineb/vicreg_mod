@@ -414,6 +414,7 @@ def main_worker(gpu, args):
             all_targets = []
             all_patient_ids = []
             all_views = []
+            all_valid_loss = []
 
             with torch.no_grad():
                 for data in val_loader:
@@ -423,12 +424,15 @@ def main_worker(gpu, args):
                     # views = data["view"]
                     output = model(images.cuda(gpu, non_blocking=True))
                     # Map outputs to range of 0-1
-                    outputs = torch.sigmoid(output).cpu()
+                    outputs = torch.sigmoid(output)
+                    # Calculate validation loss
+                    valid_loss = mim_ds.calculate_loss(predictions=outputs, targets=target)
                     # Convert Nan targest to none
                     target = target.nan_to_num(0)
                     # Append to list of all outputs
-                    all_outputs += outputs
+                    all_outputs += outputs.cpu()
                     all_targets += target.cpu()
+                    all_valid_loss.append(valid_loss.item())
                     # all_views += views
                     # all_patient_ids += patient_ids
 
@@ -439,11 +443,13 @@ def main_worker(gpu, args):
                 auc_dict,
             ) = mimiccxr_ds.calculate_auc(all_outputs, all_targets)
             # all_results = mimiccxr_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
+            avg_valid_loss = np.average(all_valid_loss)
             stats = dict(
                 epoch=epoch,
                 all_auc=auc_dict,
                 avg_auc=avg_auc_all.tolist(),
                 avg_auc_of_interest=avg_auc_of_interest,
+                validation_loss = avg_valid_loss
             )
             wandb.log(
                 {
@@ -451,6 +457,7 @@ def main_worker(gpu, args):
                     **auc_dict,
                     "avg_auc": stats["avg_auc"],
                     "avg_auc_of_interest": stats["avg_auc_of_interest"],
+                    "validation_loss": stats["validation_loss"]
                 }
             )
             print(json.dumps(stats))

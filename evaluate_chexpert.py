@@ -312,7 +312,7 @@ def main_worker(gpu, args):
         raise (f"{args.pretrained_how} is not correctly selected")
 
     # Watch the model with wandb
-    wandb.watch(model)
+    wandb.watch(backbone)
 
     param_groups = [dict(params=head.parameters(), lr=args.lr_head)]
     if args.weights == "finetune":
@@ -366,18 +366,35 @@ def main_worker(gpu, args):
             model.eval()
         else:
             assert False
-
+        grad_avgs_for_epoch = []
         for step, data in enumerate(train_loader, start=epoch * len(train_loader)):
-            # print(f"data len: {len(data)}")
-            # print(f"data type: {type(data)}")
-            # print(data)
             images = data["img"]
-            # print(images.size())
             target = data["lab"]
 
             output = model(images.cuda(gpu, non_blocking=True))
-            # loss = criterion(output, target.cuda(gpu, non_blocking=True))
             loss = chexpert_ds.calculate_loss(predictions=output, targets=target)
+            # import pdb; pdb.set_trace()
+            # Extract layer weights
+            if step % args.print_freq == 0:
+                grad_avgs = {}
+                try:
+                    if args.weights == "finetune":
+                        grad_avgs = {
+                            "layer1.0.conv1.grad": abs(model[0].layer1.get_submodule('0').conv1.weight.grad).mean().item(),
+                            "layer2.0.conv1.grad": abs(model[0].layer2.get_submodule('0').conv1.weight.grad).mean().item(),
+                            "layer3.0.conv1.grad": abs(model[0].layer3.get_submodule('0').conv1.weight.grad).mean().item(),
+                            "layer4.0.conv1.grad": abs(model[0].layer4.get_submodule('0').conv1.weight.grad).mean().item(),
+                            "linear_classifier": abs(model[1].weight.grad).mean().item(),
+                            }
+                        grad_avgs_for_epoch.append(grad_avgs)
+                    else:
+                        grad_avgs = {
+                            "linear_classifier": abs(model[1].weight.grad).mean().item(),
+                            }
+                        grad_avgs_for_epoch.append(grad_avgs)
+                except Exception as e:
+                    print(e)
+                    
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -393,6 +410,7 @@ def main_worker(gpu, args):
                         lr_head=lr_head,
                         loss=loss.item(),
                         time=int(time.time() - start_time),
+                        **grad_avgs
                     )
                     wandb.log(stats)
                     # Find garbage
@@ -414,23 +432,27 @@ def main_worker(gpu, args):
             all_targets = []
             all_patient_ids = []
             all_views = []
+            all_valid_loss = []
 
             with torch.no_grad():
                 for data in val_loader:
                     images = data["img"]
                     target = data["lab"]
-                    patient_ids = data["patientid"]
-                    views = data["view"]
+                    # patient_ids = data["patientid"]
+                    # views = data["view"]
                     output = model(images.cuda(gpu, non_blocking=True))
                     # Map outputs to range of 0-1
-                    outputs = torch.sigmoid(output).cpu()
+                    outputs = torch.sigmoid(output)
+                    # Calculate validation loss
+                    valid_loss = chexpert_ds.calculate_loss(predictions=outputs, targets=target)
                     # Convert Nan targest to none
                     target = target.nan_to_num(0)
                     # Append to list of all outputs
-                    all_outputs += outputs
+                    all_outputs += outputs.cpu()
                     all_targets += target.cpu()
-                    all_views += views
-                    all_patient_ids += patient_ids
+                    all_valid_loss.append(valid_loss.item())
+                    # all_views += views
+                    # all_patient_ids += patient_ids
 
             (
                 all_auc,
@@ -439,6 +461,7 @@ def main_worker(gpu, args):
                 auc_dict,
             ) = chexpert_ds.calculate_auc(all_outputs, all_targets)
             # all_results = chexpert_ds.store_round_results(all_outputs, all_targets, all_views, all_patient_ids)
+            avg_valid_loss = np.average(all_valid_loss)
             stats = dict(
                 epoch=epoch,
                 all_auc=auc_dict,
@@ -451,6 +474,8 @@ def main_worker(gpu, args):
                     **auc_dict,
                     "avg_auc": stats["avg_auc"],
                     "avg_auc_of_interest": stats["avg_auc_of_interest"],
+                    "validation_loss": stats["validation_loss"],
+                    "grad_avgs_for_epoch": grad_avgs_for_epoch,
                 }
             )
             print(json.dumps(stats))

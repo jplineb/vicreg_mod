@@ -8,3 +8,6 @@ __pycache__
 *.log
 *.yaml
 *wandb/
+notebooks/might_be_to_big.csv
+notebooks/project.csv
+notebooks/results.csv
