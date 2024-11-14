@@ -336,17 +336,7 @@ def main_worker(gpu, args):
     )
     train_loader = mimiccxr_ds.get_dataloader(split="train")
     val_loader = mimiccxr_ds.get_dataloader(split="valid")
-    """
-    NOTE: here we are going to define the pathologies we care about for benchmark comparions
-    - The model is not training on these, just reporting results
-    """
-    pathologies_of_interest = [
-        "Atelectasis",
-        "Cardiomegaly",
-        "Consolidation",
-        "Edema",
-        "Effusion",
-    ]
+
     start_time = time.time()
     for epoch in range(start_epoch, args.epochs):
         print("Begining training")
@@ -391,7 +381,7 @@ def main_worker(gpu, args):
                     print(gc.get_stats())
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
-                                       
+
             # Garbage Clean up
             del images
             del target
@@ -418,7 +408,9 @@ def main_worker(gpu, args):
                     # Map outputs to range of 0-1
                     outputs = torch.sigmoid(output)
                     # Calculate validation loss
-                    valid_loss = mim_ds.calculate_loss(predictions=outputs, targets=target)
+                    valid_loss = mim_ds.calculate_loss(
+                        predictions=outputs, targets=target
+                    )
                     # Convert Nan targest to none
                     target = target.nan_to_num(0)
                     # Append to list of all outputs
@@ -441,7 +433,7 @@ def main_worker(gpu, args):
                 all_auc=auc_dict,
                 avg_auc=avg_auc_all.tolist(),
                 avg_auc_of_interest=avg_auc_of_interest,
-                validation_loss = avg_valid_loss
+                validation_loss=avg_valid_loss,
             )
             wandb.log(
                 {
@@ -449,7 +441,7 @@ def main_worker(gpu, args):
                     **auc_dict,
                     "avg_auc": stats["avg_auc"],
                     "avg_auc_of_interest": stats["avg_auc_of_interest"],
-                    "validation_loss": stats["validation_loss"]
+                    "validation_loss": stats["validation_loss"],
                 }
             )
             print(json.dumps(stats))

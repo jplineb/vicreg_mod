@@ -336,17 +336,7 @@ def main_worker(gpu, args):
     )
     train_loader = chexpert_ds.get_dataloader(split="train")
     val_loader = chexpert_ds.get_dataloader(split="valid")
-    """
-    NOTE: here we are going to define the pathologies we care about for benchmark comparions
-    - The model is not training on these, just reporting results
-    """
-    pathologies_of_interest = [
-        "Atelectasis",
-        "Cardiomegaly",
-        "Consolidation",
-        "Edema",
-        "Effusion",
-    ]
+
     start_time = time.time()
     for epoch in range(start_epoch, args.epochs):
         print("Begining training")
@@ -372,21 +362,41 @@ def main_worker(gpu, args):
                 try:
                     if args.weights == "finetune":
                         grad_avgs = {
-                            "layer1.0.conv1.grad": abs(model[0].layer1.get_submodule('0').conv1.weight.grad).mean().item(),
-                            "layer2.0.conv1.grad": abs(model[0].layer2.get_submodule('0').conv1.weight.grad).mean().item(),
-                            "layer3.0.conv1.grad": abs(model[0].layer3.get_submodule('0').conv1.weight.grad).mean().item(),
-                            "layer4.0.conv1.grad": abs(model[0].layer4.get_submodule('0').conv1.weight.grad).mean().item(),
-                            "linear_classifier": abs(model[1].weight.grad).mean().item(),
-                            }
+                            "layer1.0.conv1.grad": abs(
+                                model[0].layer1.get_submodule("0").conv1.weight.grad
+                            )
+                            .mean()
+                            .item(),
+                            "layer2.0.conv1.grad": abs(
+                                model[0].layer2.get_submodule("0").conv1.weight.grad
+                            )
+                            .mean()
+                            .item(),
+                            "layer3.0.conv1.grad": abs(
+                                model[0].layer3.get_submodule("0").conv1.weight.grad
+                            )
+                            .mean()
+                            .item(),
+                            "layer4.0.conv1.grad": abs(
+                                model[0].layer4.get_submodule("0").conv1.weight.grad
+                            )
+                            .mean()
+                            .item(),
+                            "linear_classifier": abs(model[1].weight.grad)
+                            .mean()
+                            .item(),
+                        }
                         grad_avgs_for_epoch.append(grad_avgs)
                     else:
                         grad_avgs = {
-                            "linear_classifier": abs(model[1].weight.grad).mean().item(),
-                            }
+                            "linear_classifier": abs(model[1].weight.grad)
+                            .mean()
+                            .item(),
+                        }
                         grad_avgs_for_epoch.append(grad_avgs)
                 except Exception as e:
                     print(e)
-                    
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -402,14 +412,14 @@ def main_worker(gpu, args):
                         lr_head=lr_head,
                         loss=loss.item(),
                         time=int(time.time() - start_time),
-                        **grad_avgs
+                        **grad_avgs,
                     )
                     wandb.log(stats)
                     # Find garbage
                     print(gc.get_stats())
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
-                                       
+
             # Garbage Clean up
             del images
             del target
@@ -436,7 +446,9 @@ def main_worker(gpu, args):
                     # Map outputs to range of 0-1
                     outputs = torch.sigmoid(output)
                     # Calculate validation loss
-                    valid_loss = chexpert_ds.calculate_loss(predictions=outputs, targets=target)
+                    valid_loss = chexpert_ds.calculate_loss(
+                        predictions=outputs, targets=target
+                    )
                     # Convert Nan targest to none
                     target = target.nan_to_num(0)
                     # Append to list of all outputs

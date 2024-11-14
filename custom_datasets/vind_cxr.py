@@ -124,9 +124,11 @@ class VINDR_CXR_BASE(VisionDataset):
             # self.index_file = self.index_file.drop_duplicates(
             #     subset=["fname"], keep="first"
             # )
-            
+
             # Drop duplicates, use majority vote
-            self.index_file = index_file.groupby(by=["fname"]).mean().round().reset_index()
+            self.index_file = (
+                index_file.groupby(by=["fname"]).mean().round().reset_index()
+            )
 
     def read_dicom(self, file_path: str, imsize: int):
         """Read pixel array from a DICOM file and apply recale and resize

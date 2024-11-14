@@ -7,20 +7,22 @@ import numpy as np
 
 from torchmetrics import AUROC
 
+
 class Chexpert:
     """
     Chexpert paper: https://arxiv.org/pdf/1901.07031.pdf
-    
+
     Labels:
         - 1,0,-1 have mentions
         - nan is not a mention
-        
+
         Lets map the labels:
         -1: uncertain with mention -> {0,1} -> 0
         0: Negative mention -> 0
         1: Positive mention -> 1
         nan: no mention -> 0
-    """ 
+    """
+
     path_to_chexpert = "/project/dane2/wficai/chexpert/chexpertchestxrays-u20210408/"
 
     def __init__(
@@ -29,9 +31,9 @@ class Chexpert:
         transforms_pytorch="default",
         batch_size=64,
         num_workers=0,
-        gpu = None,
-        train_views = ["PA", "AP"],
-        valid_views = ["PA", "AP"]
+        gpu=None,
+        train_views=["PA", "AP"],
+        valid_views=["PA", "AP"],
     ):
         self.percent = percent
         self.transforms = transforms_pytorch
@@ -41,8 +43,14 @@ class Chexpert:
         self.train_views = train_views
         self.valid_views = valid_views
         self.gpu = gpu
-        self.pathologies_of_interest = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Effusion"]
-        
+        self.pathologies_of_interest = [
+            "Atelectasis",
+            "Cardiomegaly",
+            "Consolidation",
+            "Edema",
+            "Effusion",
+        ]
+
         print(f"using views: {self.train_views}, {self.valid_views}")
 
     @property
@@ -53,12 +61,13 @@ class Chexpert:
             )
         if self.transforms == "RGB":
             tfsms = transforms.Compose(
-                [xrv.datasets.XRayCenterCrop(),
-                 xrv.datasets.XRayResizer(224),
-                 xrv.datasets.ToPILImage(),
-                 transforms.Grayscale(3),
-                 transforms.ToTensor()
-                 ]
+                [
+                    xrv.datasets.XRayCenterCrop(),
+                    xrv.datasets.XRayResizer(224),
+                    xrv.datasets.ToPILImage(),
+                    transforms.Grayscale(3),
+                    transforms.ToTensor(),
+                ]
             )
         else:
             tfsms = self.transforms
@@ -71,9 +80,8 @@ class Chexpert:
                 imgpath=self.path_to_chexpert,
                 csvpath=f"{self.path_to_chexpert}/train.csv",
                 transform=self.transforms_pytorch,
-                views = self.train_views,
-                unique_patients=False
-                
+                views=self.train_views,
+                unique_patients=False,
             )
         if split == "valid":
             d_chex = xrv.datasets.CheX_Dataset(
@@ -81,12 +89,12 @@ class Chexpert:
                 csvpath=f"{self.path_to_chexpert}/valid.csv",
                 transform=self.transforms_pytorch,
                 views=self.valid_views,
-                unique_patients=False
+                unique_patients=False,
             )
 
         if split == "test":
             raise NotImplementedError
-        
+
         self.pathologies = d_chex.pathologies
 
         return d_chex
@@ -101,7 +109,7 @@ class Chexpert:
             plt.imshow(instance["img"].squeeze())
         except:
             # Transpose dimensions if necessary
-            plt.imshow(instance['img'].transpose(2,0))
+            plt.imshow(instance["img"].transpose(2, 0))
 
         return instance
 
@@ -133,21 +141,23 @@ class Chexpert:
     def check_dataloader(self, split="train"):
         print(next(iter(self.get_dataloader(split=split))))
 
-    def calculate_loss(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def calculate_loss(
+        self, predictions: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
         targets = targets.nan_to_num(0)
         loss_func = nn.BCEWithLogitsLoss().cuda(self.gpu)
         loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True))
         return loss
-    
+
     def calculate_accuracy(self, outputs: torch.Tensor, targets: torch.Tensor):
-        '''
+        """
         https://discuss.pytorch.org/t/how-to-calculate-accuracy-for-multi-label-classification/94906/2
         NOTE: Had to implement in code (ie. not used right now)
-        '''
+        """
         outputs = torch.sigmoid(outputs).cpu()
         predicted = np.round(outputs)
         return predicted
-    
+
     def calculate_auc(self, outputs, targets):
         # Calculate metrics
         """
@@ -158,8 +168,10 @@ class Chexpert:
         au_roc = AUROC(task="multilabel", num_labels=13, average=None)
         au_roc_average = AUROC(task="multilabel", num_labels=13)
         auc_calc_all = au_roc(torch.stack(outputs), torch.stack(targets).int())
-        auc_roc_avg_all = au_roc_average(torch.stack(outputs), torch.stack(targets).int())
-        
+        auc_roc_avg_all = au_roc_average(
+            torch.stack(outputs), torch.stack(targets).int()
+        )
+
         # Get the AUROCs of interest
         auc_dict = {}
         auc_of_interest = []
@@ -169,31 +181,27 @@ class Chexpert:
             # If AUC in pathologies of interest put them in list
             if pathology in self.pathologies_of_interest:
                 auc_of_interest.append(auc)
-        
+
         # Get average of AUROC of interest
         auc_of_avg_interest = np.mean(auc_of_interest)
-        
+
         return auc_calc_all, auc_roc_avg_all, auc_of_avg_interest, auc_dict
-    
+
     def store_round_results(self, outputs, targets, views, patient_ids):
         au_roc = AUROC(task="multilabel", num_labels=13, average=None)
-        
+
         all_results = []
-        for output, target, view, patient_id in zip(outputs, targets, views, patient_ids):
-            
+        for output, target, view, patient_id in zip(
+            outputs, targets, views, patient_ids
+        ):
+
             auc_calc = au_roc(output, target)
             # Create a dict for each row
-            results = dict(
-                patient_id = patient_id,
-                view = view
-            )
+            results = dict(patient_id=patient_id, view=view)
             # Loop and store in results
             for pathology, auc in zip(self.pathologies, auc_calc):
                 results[pathology] = auc
-            
+
             all_results.append(results)
-        
+
         return all_results
-            
-        
-        

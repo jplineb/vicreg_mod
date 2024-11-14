@@ -1,5 +1,6 @@
 import sys
-sys.path.insert(0,"..")
+
+sys.path.insert(0, "..")
 from custom_datasets import VINDR_CXR_BASE
 
 data_path = "/project/dane2/wficai/BenchMD/vindr-cxr/1.0.0/"

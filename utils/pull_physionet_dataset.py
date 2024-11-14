@@ -6,13 +6,15 @@ import requests
 import threading
 import subprocess
 
+
 def download_file(url):
-    command = f'wget -N -c -np --user jplineb --password=mS-q.wXZJvwxM4d {url}'
+    command = f"wget -N -c -np --user jplineb --password=mS-q.wXZJvwxM4d {url}"
     subprocess.call(command, shell=True)
 
+
 def main():
-    base_url = 'https://physionet.org/files/mimic-cxr-jpg/2.0.0/files/'
-    file_urls = ["p"+str(num) for num in range(10,20)]
+    base_url = "https://physionet.org/files/mimic-cxr-jpg/2.0.0/files/"
+    file_urls = ["p" + str(num) for num in range(10, 20)]
 
     threads = []
     for url in file_urls:
@@ -23,6 +25,7 @@ def main():
 
     for thread in threads:
         thread.join()
+
 
 if __name__ == "__main__":
     main()

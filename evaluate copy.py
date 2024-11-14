@@ -50,9 +50,9 @@ def get_arguments():
     parser.add_argument(
         "--split",
         type=str,
-        choices=("val","test"),
+        choices=("val", "test"),
         default="val",
-        help="Split for perfoming training or testing"
+        help="Split for perfoming training or testing",
     )
 
     # Checkpoint
@@ -196,18 +196,19 @@ def main_worker(gpu, args):
     else:
         start_epoch = 0
         best_acc = argparse.Namespace(top1=0, top5=0)
-    
+
     if args.dataset_id == "RadImagenet":
         from custom_datasets import RadImageNet
+
         rad_image_net = RadImageNet(
             gpu=gpu,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
-            )
+        )
         if args.split == "test":
             testdir = args.data_dir / "test"
             normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             )
 
             test_dataset = datasets.ImageFolder(
@@ -222,15 +223,15 @@ def main_worker(gpu, args):
                 ),
             )
             kwargs = dict(
-                    batch_size=args.batch_size // args.world_size,
-                    num_workers=args.workers,
-                    pin_memory=True,
-                    )
+                batch_size=args.batch_size // args.world_size,
+                num_workers=args.workers,
+                pin_memory=True,
+            )
 
             test_loader = torch.utils.data.DataLoader(test_dataset, **kwargs)
 
             # test_loader = rad_image_net.get_dataloader(split="test")
-            
+
             # evaluate
             model.eval()
             if args.rank == 0:
@@ -254,9 +255,9 @@ def main_worker(gpu, args):
                     best_acc1=best_acc.top1,
                     best_acc5=best_acc.top5,
                 )
-                                
+
                 # stats = rad_image_net.evaluate(model, best_acc, epoch=0)
-                
+
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
 
@@ -290,8 +291,6 @@ def main_worker(gpu, args):
                     ]
                 ),
             )
-            
-            
 
             if args.train_percent in {1, 10}:
                 train_dataset.samples = []
@@ -312,7 +311,7 @@ def main_worker(gpu, args):
             #     train_dataset, sampler=train_sampler, **kwargs
             # )
             # val_loader = torch.utils.data.DataLoader(val_dataset, **kwargs)
-            
+
             train_loader = rad_image_net.get_dataloader(split="train")
             val_loader = test_loader = rad_image_net.get_dataloader(split="valid")
 
