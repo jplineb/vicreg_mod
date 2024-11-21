@@ -1,12 +1,15 @@
 from typing import OrderedDict
 import torch
 import torch.nn as nn
-
+import resnet
 
 class ConstructModel:
-    def __init__(self, backbone, head):
-        self.backbone = backbone
-        self.head = head
+    def __init__(self, pretrained_weights=None):
+        if pretrained_weights:
+            self.load_pretrained_weights(pretrained_weights)
+        else:
+            self.backbone = None
+            self.head = None
 
     def modify_head(self, num_classes):
         self.head.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
@@ -61,3 +64,32 @@ class ConstructModel:
         state_dict = torch.load(pretrained_weights, map_location=device)
         self.backbone.load_state_dict(state_dict)
         return self.backbone
+
+
+class LoadVICRegModel:
+    def __init__(self, arch):
+        print("Loading local VICReg ResNet50 arch Model")
+        self.backbone, self.embedding = resnet.__dict__[arch](zero_init_residual=True)
+
+    def load_pretrained_weights(self, pretrained_path: str):
+        # Get state dict
+        state_dict = torch.load(pretrained_path, map_location="cpu")
+        # Handle weights from distributed training
+        if "model" in state_dict:
+                print("Loading model from state_dict")
+                state_dict = state_dict["model"]
+                state_dict = {
+                    key.replace("module.backbone.", ""): value
+                    for (key, value) in state_dict.items()
+                }
+        # Finally load the weights
+        self.backbone.load_state_dict(state_dict, strict=False)
+    
+    def modify_head(self, num_classes: int):
+        self.head = nn.Linear(self.embedding, num_classes)
+        self.head.weight.data.normal_(mean=0.0, std=0.01)
+        self.head.bias.data.zero_()
+    
+    def produce_model(self):
+        return nn.Sequential(self.backbone, self.head)
+
