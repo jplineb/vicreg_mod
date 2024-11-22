@@ -38,28 +38,10 @@ class MedicalDataset(ABC):
         pass
 
     def get_dataloader(
-        self, split: str = "train", distributed: bool = False
-    ) -> torch.utils.data.DataLoader:
+        self, split: str = "train"
+    ) -> None:
         """Return dataloader for a specific split"""
-        print(f"Fetching dataloader for {split} split")
-
-        if distributed:
-            if split != "train":
-                raise NotImplementedError(
-                    f"Distributed training not supported for {split} split"
-                )
-
-            dataset = self.get_dataset(split=split)
-            train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-            dataloader = torch.utils.data.DataLoader(
-                train_sampler, **self.data_loader_spec
-            )
-            return dataloader, train_sampler
-
-        dataloader = torch.utils.data.DataLoader(
-            self.get_dataset(split=split), **self.data_loader_spec
-        )
-        return dataloader
+        raise NotImplementedError("Subclasses must implement this method")
 
     def check_dataloader(self, split: str = "train") -> None:
         """Utility method to inspect a batch from the dataloader"""
@@ -81,58 +63,3 @@ class MedicalDataset(ABC):
         outputs = torch.sigmoid(outputs).cpu()
         predicted = np.round(outputs)
         return predicted
-
-    def calculate_auc(
-        self, outputs: List[torch.Tensor], targets: List[torch.Tensor]
-    ) -> tuple:
-        """Calculate various AUROC metrics"""
-        num_classes = len(self.pathologies)
-
-        # Calculate AUROC for all classes
-        au_roc = AUROC(task="multilabel", num_labels=num_classes, average=None)
-        au_roc_average = AUROC(task="multilabel", num_labels=num_classes)
-
-        auc_calc_all = au_roc(torch.stack(outputs), torch.stack(targets).int())
-        auc_roc_avg_all = au_roc_average(
-            torch.stack(outputs), torch.stack(targets).int()
-        )
-
-        # Calculate per-pathology AUCs
-        auc_dict = {}
-        auc_of_interest = []
-        for pathology, auc in zip(self.pathologies, auc_calc_all.tolist()):
-            auc_dict[pathology] = auc
-            if pathology in self.pathologies_of_interest:
-                auc_of_interest.append(auc)
-
-        # Calculate average AUC for pathologies of interest
-        auc_of_avg_interest = np.mean(auc_of_interest) if auc_of_interest else 0
-
-        return auc_calc_all, auc_roc_avg_all, auc_of_avg_interest, auc_dict
-
-    def store_round_results(
-        self,
-        outputs: List[torch.Tensor],
-        targets: List[torch.Tensor],
-        views: List[str],
-        patient_ids: List[str],
-    ) -> List[Dict[str, Any]]:
-        """Store per-patient results including AUCs for each pathology"""
-        au_roc = AUROC(
-            task="multilabel", num_labels=len(self.pathologies), average=None
-        )
-
-        all_results = []
-        for output, target, view, patient_id in zip(
-            outputs, targets, views, patient_ids
-        ):
-            auc_calc = au_roc(output, target)
-
-            results = {"patient_id": patient_id, "view": view}
-
-            for pathology, auc in zip(self.pathologies, auc_calc):
-                results[pathology] = auc
-
-            all_results.append(results)
-
-        return all_results
