@@ -13,10 +13,12 @@ class ConstructModel:
             self.head = None
 
     def modify_head(self, num_classes):
-        self.head.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+        if self.head is not None and self.backbone is not None:
+            self.head.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
 
     def modify_backbone(self, pretrained_weights):
-        self.backbone.load_state_dict(torch.load(pretrained_weights))
+        if self.backbone is not None:
+            self.backbone.load_state_dict(torch.load(pretrained_weights))
 
     def frankenstien_model(self, late_model, cut_off_layer) -> torch.nn.Module:
         """
