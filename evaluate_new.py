@@ -2,8 +2,6 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 import gc
-import logging
-import json
 
 import torch
 import torch.optim as optim
@@ -141,6 +139,7 @@ def wandb_init(args):
 def main():
     # Environment setup
     args, gpu = environment_setup()
+    
     # Construct model
     model = LoadVICRegModel(args.arch)
     model.load_pretrained_weights(args.pretrained_path)
