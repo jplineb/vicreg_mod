@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import resnet
 
+
 class ConstructModel:
     def __init__(self, pretrained_weights=None):
         if pretrained_weights:
@@ -76,20 +77,19 @@ class LoadVICRegModel:
         state_dict = torch.load(pretrained_path, map_location="cpu")
         # Handle weights from distributed training
         if "model" in state_dict:
-                print("Loading model from state_dict")
-                state_dict = state_dict["model"]
-                state_dict = {
-                    key.replace("module.backbone.", ""): value
-                    for (key, value) in state_dict.items()
-                }
+            print("Loading model from state_dict")
+            state_dict = state_dict["model"]
+            state_dict = {
+                key.replace("module.backbone.", ""): value
+                for (key, value) in state_dict.items()
+            }
         # Finally load the weights
         self.backbone.load_state_dict(state_dict, strict=False)
-    
+
     def modify_head(self, num_classes: int):
         self.head = nn.Linear(self.embedding, num_classes)
         self.head.weight.data.normal_(mean=0.0, std=0.01)
         self.head.bias.data.zero_()
-    
+
     def produce_model(self):
         return nn.Sequential(self.backbone, self.head)
-

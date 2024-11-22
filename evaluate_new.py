@@ -14,11 +14,12 @@ from custom_datasets import DATASETS
 
 logger = get_structlog_logger()
 
+
 def get_arguments():
     parser = argparse.ArgumentParser(
         description="Evaluate a pretrained model on ImageNet"
     )
-    
+
     parser.add_argument(
         "--task_ds",
         type=str,
@@ -109,6 +110,7 @@ def get_arguments():
 
     return parser
 
+
 def environment_setup():
     gc.collect(True)
     gpu = torch.cuda.current_device()
@@ -116,6 +118,7 @@ def environment_setup():
     torch.backends.cudnn.benchmark = True
     args = get_arguments().parse_args()
     return args, gpu
+
 
 def wandb_init(args):
     wandb.init(
@@ -136,10 +139,11 @@ def wandb_init(args):
         resume=args.resume,
     )
 
+
 def main():
     # Environment setup
     args, gpu = environment_setup()
-    
+
     # Construct model
     model = LoadVICRegModel(args.arch)
     model.load_pretrained_weights(args.pretrained_path)
@@ -147,7 +151,9 @@ def main():
     model = model.produce_model()
 
     # Load dataset and dataloader
-    dataset = DATASETS[args.task_ds](batch_size=args.batch_size, num_workers=args.workers, gpu=gpu)
+    dataset = DATASETS[args.task_ds](
+        batch_size=args.batch_size, num_workers=args.workers, gpu=gpu
+    )
     train_loader = dataset.get_dataloader(split="train")
     val_loader = dataset.get_dataloader(split="valid")
 
@@ -155,7 +161,15 @@ def main():
     param_groups = [dict(params=model.head.parameters(), lr=args.lr_head)]
     optimizer = optim.Adam(param_groups, 0, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
-    training_loop = TrainingLoop(model, optimizer, scheduler, train_loader, val_loader, dataset, args, stats_file=None, gpu=gpu)
+    training_loop = TrainingLoop(
+        model,
+        optimizer,
+        scheduler,
+        train_loader,
+        val_loader,
+        dataset,
+        args,
+        stats_file=None,
+        gpu=gpu,
+    )
     training_loop.train(start_epoch=0, num_epochs=args.epochs)
-
-

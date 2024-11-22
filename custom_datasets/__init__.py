@@ -9,5 +9,5 @@ DATASETS = {
     "chexpert": Chexpert,
     "vinddrcxr": VINDR_CXR,
     "mimic_cxr": MIMIC_CXR,
-    "radimagenet": RadImageNet
+    "radimagenet": RadImageNet,
 }

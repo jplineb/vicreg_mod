@@ -10,6 +10,7 @@ from utils.logging import get_structlog_logger
 
 logger = get_structlog_logger()
 
+
 class TrainingLoop:
     def __init__(
         self,
@@ -102,14 +103,19 @@ class TrainingLoop:
                 all_targets += target.cpu()
                 all_valid_loss.append(valid_loss.item())
 
-        
-        all_auc, avg_auc_all, avg_auc_of_interest, auc_dict= self.calculate_validation_stats(epoch, all_outputs, all_targets, all_valid_loss)
+        all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
+            self.calculate_validation_stats(
+                epoch, all_outputs, all_targets, all_valid_loss
+            )
+        )
         del all_outputs
         del all_targets
 
         return all_auc, avg_auc_all
-    
-    def calculate_validation_stats(self, epoch: int, all_outputs, all_targets, all_valid_loss):
+
+    def calculate_validation_stats(
+        self, epoch: int, all_outputs, all_targets, all_valid_loss
+    ):
         """Calculate and log validation statistics"""
         all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
             self.dataset_handler.calculate_auc(all_outputs, all_targets)
