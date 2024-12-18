@@ -6,12 +6,12 @@ import torch
 import torch.optim as optim
 import wandb
 
-from utils.logging import get_structlog_logger
+from utils.logging import configure_logging
 from utils.construct_model import LoadVICRegModel
 from utils.training_loop import TrainingLoop
 from custom_datasets import DATASETS
 
-logger = get_structlog_logger()
+logger = configure_logging()
 
 
 def get_arguments():
@@ -142,22 +142,27 @@ def wandb_init(args):
 def main():
     # Environment setup
     args, gpu = environment_setup()
+    wandb_init(args)
 
     # Construct model
     model = LoadVICRegModel(args.arch)
     model.load_pretrained_weights(args.pretrained_path)
     model.modify_head(num_classes=13)
     model = model.produce_model()
+    model.cuda(gpu)
 
     # Load dataset and dataloader
     dataset = DATASETS[args.task_ds](
-        batch_size=args.batch_size, num_workers=args.workers, gpu=gpu
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        gpu=gpu,
+        transforms_pytorch="RGB",
     )
     train_loader = dataset.get_dataloader(split="train")
     val_loader = dataset.get_dataloader(split="valid")
 
     # Train/Eval loop
-    param_groups = [dict(params=model.head.parameters(), lr=args.lr_head)]
+    param_groups = [dict(params=model[-1].parameters(), lr=args.lr_head)]
     optimizer = optim.Adam(param_groups, 0, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
     training_loop = TrainingLoop(

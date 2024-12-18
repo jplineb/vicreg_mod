@@ -7,6 +7,10 @@ import numpy as np
 
 from torchmetrics import AUROC
 
+from utils.logging import configure_logging
+
+logger = configure_logging()
+
 
 class Chexpert:
     """
@@ -23,7 +27,9 @@ class Chexpert:
         nan: no mention -> 0
     """
 
-    path_to_chexpert = "/project/dane2/wficai/chexpert/chexpertchestxrays-u20210408/"
+    path_to_chexpert = (
+        "/project/dane2/wficai/chexpert/chexpertchestxrays-u20210408/CheXpert-v1.0/"
+    )
 
     def __init__(
         self,
@@ -51,7 +57,7 @@ class Chexpert:
             "Effusion",
         ]
 
-        print(f"using views: {self.train_views}, {self.valid_views}")
+        logger.info(f"using views: {self.train_views}, {self.valid_views}")
 
     @property
     def transforms_pytorch(self):
@@ -59,7 +65,7 @@ class Chexpert:
             tfsms = transforms.Compose(
                 [xrv.datasets.XRayCenterCrop(), xrv.datasets.XRayResizer(224)]
             )
-        if self.transforms == "RGB":
+        elif self.transforms == "RGB":
             tfsms = transforms.Compose(
                 [
                     xrv.datasets.XRayCenterCrop(),
@@ -119,10 +125,10 @@ class Chexpert:
         """
         Return dataloader given a certain split
         """
-        print(f"Fetching dataloader for {split} split")
+        logger.info(f"Fetching dataloader for {split} split")
         if distributed:
             if split != "train":
-                print(f"Probably shouldn't use {split} for distrbuted training")
+                logger.info(f"Probably shouldn't use {split} for distrbuted training")
                 raise NotImplementedError
             else:
                 dataset = self.get_dataset(split=split)

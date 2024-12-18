@@ -1,3 +1,4 @@
+from calendar import c
 import gc
 import time
 import json
@@ -6,9 +7,9 @@ import torch
 import wandb
 from datetime import datetime
 
-from utils.logging import get_structlog_logger
+from utils.logging import configure_logging
 
-logger = get_structlog_logger()
+logger = configure_logging()
 
 
 class TrainingLoop:
@@ -72,10 +73,10 @@ class TrainingLoop:
                     time=int(time.time() - self.start_time),
                 )
                 wandb.log(stats)
-                print(gc.get_stats())
-                print(json.dumps(stats))
+                logger.info(gc.get_stats())
+                logger.info(json.dumps(stats))
                 if self.stats_file:
-                    print(json.dumps(stats), file=self.stats_file)
+                    logger.info(json.dumps(stats), file=self.stats_file)
 
             del images
             del target
@@ -83,7 +84,7 @@ class TrainingLoop:
     def evaluate(self, epoch: int):
         """Run evaluation on validation set"""
         self.model.eval()
-        print(f"Starting Eval {datetime.now()}")
+        logger.info(f"Starting Eval {datetime.now()}")
 
         all_outputs = []
         all_targets = []
@@ -140,16 +141,16 @@ class TrainingLoop:
             }
         )
 
-        print(json.dumps(stats))
+        logger.info(json.dumps(stats))
         if self.stats_file:
-            print(json.dumps(stats), file=self.stats_file)
+            logger.info(json.dumps(stats), file=self.stats_file)
 
         return all_auc, avg_auc_all
 
     def train(self, start_epoch: int, num_epochs: int):
         """Main training loop"""
         for epoch in range(start_epoch, num_epochs):
-            print("Beginning training")
+            logger.info("Beginning training")
             self.train_epoch(epoch)
             all_auc, avg_auc_all = self.evaluate(epoch)
             self.scheduler.step()
