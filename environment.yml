@@ -1,4 +1,4 @@
-name: /Users/jp/micromamba/envs/disres
+name: disres
 channels:
   - pytorch
   - conda-forge

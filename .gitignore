@@ -10,3 +10,5 @@ __pycache__
 notebooks/might_be_to_big.csv
 notebooks/project.csv
 notebooks/results.csv
+*stats.txt
+VICReg_RadImageNet/stats_clean.txt
