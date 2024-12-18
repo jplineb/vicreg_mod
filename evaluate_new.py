@@ -172,3 +172,7 @@ def main():
         gpu=gpu,
     )
     training_loop.train(start_epoch=0, num_epochs=args.epochs)
+
+
+if __name__ == "__main__":
+    main()
