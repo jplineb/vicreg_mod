@@ -16,7 +16,7 @@ def configure_logging():
     structlog.configure(
         processors=[
             structlog.stdlib.add_log_level,  # Include log level in the output
-            structlog.processors.TimeStamper(fmt="iso"),  # Timestamp in ISO format
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M"),  # Timestamp with minute precision
             # structlog.processors.JSONRenderer(),  # Render logs as JSON
             structlog.processors.StackInfoRenderer(),  # Include stack info for exceptions
             structlog.processors.format_exc_info,  # Format exception information
