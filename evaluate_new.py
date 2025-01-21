@@ -144,6 +144,16 @@ def main():
     args, gpu = environment_setup()
     wandb_init(args)
 
+    # Load dataset and dataloader
+    dataset = DATASETS[args.task_ds](
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        gpu=gpu,
+        # transforms_pytorch="RGB",
+    )
+    train_loader = dataset.get_dataloader(split="train")
+    val_loader = dataset.get_dataloader(split="valid")
+
     # Construct model
     model = LoadVICRegModel(args.arch)
     model.load_pretrained_weights(args.pretrained_path)
@@ -151,18 +161,12 @@ def main():
     model = model.produce_model()
     model.cuda(gpu)
 
-    # Load dataset and dataloader
-    dataset = DATASETS[args.task_ds](
-        batch_size=args.batch_size,
-        num_workers=args.workers,
-        gpu=gpu,
-        transforms_pytorch="RGB",
-    )
-    train_loader = dataset.get_dataloader(split="train")
-    val_loader = dataset.get_dataloader(split="valid")
-
     # Train/Eval loop
+    ## Load up param groups
     param_groups = [dict(params=model[-1].parameters(), lr=args.lr_head)]
+    if args.weights == "finetune":
+        param_groups.append(dict(params=model[:-1].parameters(), lr=args.lr_backbone))
+    ## Setup optimizer and scheduler
     optimizer = optim.Adam(param_groups, 0, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
     training_loop = TrainingLoop(

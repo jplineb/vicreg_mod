@@ -1,4 +1,3 @@
-from calendar import c
 import gc
 import time
 import json
@@ -73,7 +72,7 @@ class TrainingLoop:
                     time=int(time.time() - self.start_time),
                 )
                 wandb.log(stats)
-                logger.info(gc.get_stats())
+                logger.debug(gc.get_stats())
                 logger.info(json.dumps(stats))
                 if self.stats_file:
                     logger.info(json.dumps(stats), file=self.stats_file)
