@@ -195,13 +195,12 @@ class TrainingLoop:
             all_auc, avg_auc_all = self.evaluate(epoch)
             self.scheduler.step()
 
-            if self.args.rank == 0:
-                state = dict(
-                    epoch=epoch + 1,
-                    all_auc=all_auc.tolist(),
-                    best_auc=avg_auc_all.tolist(),
-                    model=self.model.state_dict(),
-                    optimizer=self.optimizer.state_dict(),
-                    scheduler=self.scheduler.state_dict(),
-                )
-                torch.save(state, self.args.exp_dir / "checkpoint.pth")
+            state = dict(
+                epoch=epoch + 1,
+                all_auc=all_auc.tolist(),
+                best_auc=avg_auc_all.tolist(),
+                model=self.model.state_dict(),
+                optimizer=self.optimizer.state_dict(),
+                scheduler=self.scheduler.state_dict(),
+            )
+            torch.save(state, self.args.exp_dir / "checkpoint.pth")

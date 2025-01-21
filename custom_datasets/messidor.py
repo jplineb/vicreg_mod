@@ -31,7 +31,7 @@ class MessidorBase(VisionDataset):
         transforms_pytorch: str | None | transforms.Compose = "default",
     ):
         self._transforms_pytorch = transforms_pytorch
-        assert self._transforms_pytorch not in ["default", None]
+        assert self._transforms_pytorch is not None
         super().__init__(root, transform=self.transforms_pytorch)
 
         self.split = split
@@ -91,10 +91,10 @@ class Messidor:
 
     def __init__(
         self,
-        path_to_messidor: str,
+        path_to_messidor: str = "/project/dane2/wficai/BenchMD/messidor",
         batch_size: int = 64,
         num_workers: int = 4,
-        transforms_pytorch="default",
+        transforms_pytorch: str | transforms.Compose = "default",
         gpu=None,
         train_split_frac: float = 0.8,
     ):
