@@ -199,15 +199,18 @@ class Messidor:
     def calculate_loss(
         self, predictions: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
-        targets = targets.nan_to_num(0)  # NOTE: may not be necessary, look into this
-        loss_func = torch.nn.BCEWithLogitsLoss().cuda(self.gpu)
-        loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).float())
+        loss_func = torch.nn.CrossEntropyLoss().cuda(self.gpu)
+        loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).long())
         return loss
 
     def calculate_auc(self, outputs, targets):
         # Calculate AUROC
+        # import pdb; pdb.set_trace()
+        outputs = torch.stack(outputs)
+        targets = torch.stack(targets).long()
+
         au_roc = AUROC(task="multiclass", num_classes=5, average=None)
-        au_roc_average = AUROC(task="multilabel", num_labels=13)
+        au_roc_average = AUROC(task="multiclass", num_classes=5)
 
         auc_calc_all = au_roc(outputs, targets)
         auc_calc_avg = au_roc_average(outputs, targets)

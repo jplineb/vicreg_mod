@@ -1,15 +1,15 @@
 import gc
+import os
 import time
 import json
 import numpy as np
 import torch
-import wandb
 from datetime import datetime
 
 from utils.logging import configure_logging
+from utils.patches import log_stats
 
 logger = configure_logging()
-
 
 class TrainingLoop:
     def __init__(
@@ -73,7 +73,7 @@ class TrainingLoop:
                     loss=loss.item(),
                     time=int(time.time() - self.start_time),
                 )
-                wandb.log(stats)
+                log_stats(stats)
                 logger.debug(gc.get_stats())
                 logger.info(json.dumps(stats))
                 if self.stats_file:
@@ -106,7 +106,7 @@ class TrainingLoop:
                 all_valid_loss.append(valid_loss.item())
 
         if self.multi_label:
-            all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
+            all_auc, avg_auc_all = (
                 self.calculate_multi_label_validation_stats(
                     epoch, all_outputs, all_targets, all_valid_loss
                 )
@@ -134,11 +134,11 @@ class TrainingLoop:
         stats = dict(
             epoch=epoch,
             all_auc=all_auc.tolist(),
-            avg_auc=avg_auc_all,
+            avg_auc=avg_auc_all.tolist(),
             validation_loss=avg_valid_loss,
         )
 
-        wandb.log(
+        log_stats(
             {
                 "epoch": epoch,
                 "avg_auc": stats["avg_auc"],
@@ -165,13 +165,13 @@ class TrainingLoop:
 
         stats = dict(
             epoch=epoch,
-            all_auc=auc_dict,
+            all_auc=auc_dict.tolist(),
             avg_auc=avg_auc_all.tolist(),
-            avg_auc_of_interest=avg_auc_of_interest,
+            avg_auc_of_interest=avg_auc_of_interest.tolist(),
             validation_loss=avg_valid_loss,
         )
 
-        wandb.log(
+        log_stats(
             {
                 "epoch": epoch,
                 **auc_dict,
@@ -203,4 +203,4 @@ class TrainingLoop:
                 optimizer=self.optimizer.state_dict(),
                 scheduler=self.scheduler.state_dict(),
             )
-            torch.save(state, self.args.exp_dir / "checkpoint.pth")
+            torch.save(state, os.path.join(self.args.exp_dir, "checkpoint.pth"))
