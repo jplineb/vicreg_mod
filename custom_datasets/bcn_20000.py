@@ -1,5 +1,5 @@
 from torchvision import transforms
-from torch.utils.data import Dataset
+from torchvision.datasets import VisionDataset
 import pandas as pd
 import numpy as np
 import os
@@ -8,7 +8,7 @@ from utils.input_spec import Input2dSpec
 import torch
 from typing import Any
 
-class BCN20000Base(Dataset):
+class BCN20000Base(VisionDataset):
     """
     ISIC2019 Dataset has a goal of classifying dermoscopic images among nine different diagnostic categories. 25,331 images are available for training across 8 different categories. We transformed them into 5 classes. 
     
@@ -18,94 +18,52 @@ class BCN20000Base(Dataset):
 
     # mean: tensor([0.6678, 0.5298, 0.5245])
     # std:  tensor([0.2231, 0.2029, 0.2145])
-    INPUT_SIZE = (224, 224)
-    PATCH_SIZE = (16, 16)
-    IN_CHANNELS = 3
-    NUM_CLASSES = 5
-    CLASSES = ['MEL', 'NV', 'BCC', 'AKIEC', 'OTHER']
-    LABEL_FRACS = {'small': 8, 'medium': 64, 'large': 256, 'full': np.inf}
+    input_size = (224, 224)
+    patch_size = (16, 16)
+    in_channels = 3
+    num_classes = 5
+    classes = ['MEL', 'NV', 'BCC', 'AKIEC', 'OTHER']
+    label_fracs = {'small': 8, 'medium': 64, 'large': 256, 'full': np.inf}
 
-    def __init__(self, base_root: str, download: bool = False, train: bool = True, finetune_size: str = None) -> None:
+    def __init__(self, root: str, download: bool = False, split: str = "train", transforms_pytorch: str | None | transforms.Compose = "default") -> None:
         super().__init__()
-        self.root = os.path.join(base_root, 'derm', 'isic2019')
+        self.root = root
+        self.split = split
+        self._transforms_pytorch = transforms_pytorch
+        assert self._transforms_pytorch is not None
+        super().__init__(root, transform=self.transforms_pytorch)
 
-        self.index_location = self.find_data()
-        self.split = 'train' if train else 'valid'
+        self.index_file = pd.read_csv(os.path.join(self.root, f"{self.split}_index.csv"))
 
-        self.finetune_size = 0 if finetune_size is None else self.LABEL_FRACS[finetune_size]
-        self.build_index()
-        self.TRANSFORMS = transforms.Compose(
+    @property
+    def transforms_pytorch(self) -> transforms.Compose:
+        if self._transforms_pytorch == "default":
+            return transforms.Compose(
             [
-                transforms.Resize(self.INPUT_SIZE[0] - 1, max_size=self.INPUT_SIZE[0]),
+                transforms.Lambda(lambda img: img.convert("RGB")),
+                transforms.Resize(self.input_size[0] - 1, max_size=self.input_size[0]),
                 transforms.ToTensor(),
                 transforms.Normalize([0.6678, 0.5298, 0.5245], [0.2231, 0.2029, 0.2145])
             ]
         )
-        self.train_split_frac = 0.8
-
-    def find_data(self):
-        os.makedirs(self.root, exist_ok=True)
-        zip_file = os.path.join(self.root, 'ISIC_2019_Training_Input.zip')
-        folder = os.path.join(self.root, 'ISIC_2019_Training_Input')
-        # # if the data has not been extracted, extract the data
-        # if not os.path.exists(folder):
-        #     print('Extracting data...')
-        #     extract_archive(zip_file)
-        #     print('Done')
-
-        # return the data folder
-        return folder
-
-    def build_index(self):
-        print('Building index...')
-        index_file = os.path.join(self.root, 'ISIC_2019_Training_GroundTruth.csv')
-        df = pd.read_csv(index_file)
-        df['image_name'] = df['image'].apply(lambda s: os.path.join(self.root, 'ISIC_2019_Training_Input/' + s + '.jpg'))
-        #merge bkl, df, vasc into other, since they are less frequent classes, also helps unify our ML task formulation
-        df['OTHER'] = np.where((df['BKL'] == 1) | (df['DF'] == 1) | (df['VASC'] == 1), 1, 0)
-        #merge ack and scc into one class akiec, as suggested by Dr. Adamson, since AK and SCC only have size differences
-        df['AKIEC'] = np.where((df['AK'] == 1) | (df['SCC'] == 1), 1, 0)
-        df = df.drop(columns=['BKL', 'DF', 'VASC', 'UNK', 'AK', 'SCC'])
-
-        cols = self.CLASSES
-
-        for c in cols:
-            df.loc[(df[c] < 0), c] = 0
-        index = pd.DataFrame(columns=df.columns)
-        df['labels'] = df[cols].idxmax(axis=1)
-        index_file = df.copy()
-        cols = ['labels']
-        # if finetuning, get 'finetune_size' labels for each class
-        # if insufficient examples, use all examples from that class
-        for c in cols:
-            unique_counts = index_file[c].value_counts()
-            for c_value, l in unique_counts.items():
-                df_sub = index_file[index_file[c] == c_value]
-                if self.finetune_size > 0:
-                    #if finetune
-                    g = df_sub.sample(n=min(l, self.finetune_size), replace=False)
-                else:
-                    #if train
-                    g = df_sub.sample(frac=self.train_split_frac, replace=False)
-                index = index.append(g)
-        index_file = index.reset_index(drop=True)
-        #if valid
-        if self.split != 'train':
-            index_file = pd.concat([df, index_file]).drop_duplicates(keep=False)
-        df = index_file.reset_index(drop=True)
-        self.fnames = df['image_name'].to_numpy()
-        #5 classes defined to generalize across dermatology tasks
-        self.labels = df[['MEL', 'NV', 'BCC', 'AKIEC', 'OTHER']].values
-        print('Done')
-
+        elif self._transforms_pytorch is None:
+            raise ValueError("Must pass transforms")
+        
     def __len__(self) -> int:
-        return len(self.fnames)
+        return len(self.index_file)
 
     def __getitem__(self, index: int) -> Any:
-        fname = self.fnames[index]
+        df_row = self.index_file.iloc[index]
+        fname = df_row["image_name"]
+        label = df_row[self.classes].values
 
-        img = Image.open(fname).convert('RGB')
-        img = self.TRANSFORMS(img)
+        img = Image.open(fname)
+        if self.transforms_pytorch is not None:
+            img = self.transforms_pytorch(img)
+
+        sample = {}
+        sample["idx"] = index
+
         _, h, w = np.array(img).shape
         if h > w:
             dim_gap = img.shape[1] - img.shape[2]
@@ -113,32 +71,83 @@ class BCN20000Base(Dataset):
             img = transforms.Pad((pad1, 0, pad2, 0))(img)
         elif h == w:
             #edge case 223,223,  resize to match 224*224
-            dim_gap = self.INPUT_SIZE[0] - h
+            dim_gap = self.input_size[0] - h
             pad1, pad2 = dim_gap, dim_gap
             img = transforms.Pad((pad1, pad2, 0, 0))(img)
         else:
             dim_gap = img.shape[2] - img.shape[1]
             pad1, pad2 = dim_gap // 2, (dim_gap + (dim_gap % 2)) // 2
             img = transforms.Pad((0, pad1, 0, pad2))(img)
+        
+        sample["lab"] = label
+        sample["img"] = img.float()
 
-        label = torch.tensor(np.argmax(self.labels[index])).item()
-        return index, img.float(), label
+        return sample
 
     @staticmethod
     def num_classes():
-        return BCN20000Base.NUM_CLASSES
+        return BCN20000Base.num_classes
 
     @staticmethod
     def spec():
         return [
-            Input2dSpec(input_size=BCN20000Base.INPUT_SIZE, patch_size=BCN20000Base.PATCH_SIZE, in_channels=BCN20000Base.IN_CHANNELS),
+            Input2dSpec(input_size=BCN20000Base.input_size, patch_size=BCN20000Base.patch_size, in_channels=BCN20000Base.in_channels),
         ]
 
 class BCN20000:
     """ISIC2019 (BCN_20000)Dataset has a goal of classifying dermoscopic images among nine different diagnostic categories. 25,331 images are available for training across 8 different categories. We transformed them into 5 classes."""
+    input_size = (224, 224)
+    patch_size = (16, 16)
+    in_channels = 3
+    num_classes = 5
+    classes = ['MEL', 'NV', 'BCC', 'AKIEC', 'OTHER']
 
-    def __init__(self, path_to_bcn_20000 = "/project/dane2/wficai/BenchMD/isic2019/ISIC_2019_Training_Input", transforms_pytorch="default", batch_size=64, num_workers=0, gpu=None, train_split_frac:float = 0.8):
-        pass
+    def __init__(self, path_to_bcn_20000 = "/project/dane2/wficai/BenchMD/isic2019/", transforms_pytorch="default", batch_size=64, num_workers=0, gpu=None, train_split_frac:float = 0.8):
+        self.path_to_bcn_20000 = path_to_bcn_20000
+        self.transforms = transforms_pytorch
+        self.gpu = gpu
+        self.train_split_frac = train_split_frac
+        self.root = path_to_bcn_20000
+        self.num_workers = num_workers
+        self.batch_size = batch_size
+
+    def build_index(self) -> None:
+        print('Building index...')
+        index_file = os.path.join(self.path_to_bcn_20000, 'ISIC_2019_Training_GroundTruth.csv')
+        df = pd.read_csv(index_file)
+        df['image_name'] = df['image'].apply(lambda s: os.path.join(self.root, 'ISIC_2019_Training_Input/' + s + '.jpg'))
+        
+        # merge bkl, df, vasc into other, since they are less frequent classes
+        df['OTHER'] = np.where((df['BKL'] == 1) | (df['DF'] == 1) | (df['VASC'] == 1), 1, 0)
+        # merge ack and scc into one class akiec
+        df['AKIEC'] = np.where((df['AK'] == 1) | (df['SCC'] == 1), 1, 0)
+        df = df.drop(columns=['BKL', 'DF', 'VASC', 'UNK', 'AK', 'SCC'])
+
+        # Clean up negative values
+        for c in self.classes:
+            df.loc[(df[c] < 0), c] = 0
+        
+        df['labels'] = df[self.classes].idxmax(axis=1)
+        
+        # Create train and validation splits
+        train_index = pd.DataFrame(columns=df.columns)
+        for label in df['labels'].unique():
+            df_sub = df[df['labels'] == label]
+            train_subset = df_sub.sample(frac=self.train_split_frac, replace=False)
+            train_index = pd.concat([train_index, train_subset])
+        
+        # Get validation set as remaining samples
+        valid_index = pd.concat([df, train_index]).drop_duplicates(keep=False)
+        
+        # Save splits to files
+        train_output = os.path.join(self.path_to_bcn_20000, 'train_index.csv')
+        valid_output = os.path.join(self.path_to_bcn_20000, 'valid_index.csv')
+        
+        train_index.to_csv(train_output, index=False)
+        print(f"Train split saved to {train_output}")
+        valid_index.to_csv(valid_output, index=False)
+        print(f"Validation split saved to {valid_output}")
+        print('Done')
 
     def get_dataset(self, split="train"):
         pass

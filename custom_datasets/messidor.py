@@ -40,7 +40,7 @@ class MessidorBase(VisionDataset):
         )
 
     @property
-    def transforms_pytorch(self):
+    def transforms_pytorch(self) -> transforms.Compose:
         if self._transforms_pytorch == "default":
             return transforms.Compose(
                 [
@@ -57,8 +57,6 @@ class MessidorBase(VisionDataset):
             )
         elif self._transforms_pytorch is None:
             raise ValueError("Must pass transforms")
-        else:
-            return self._transforms_pytorch
 
     def __getitem__(self, index):
         df_row = self.index_file.iloc[index]
@@ -68,8 +66,8 @@ class MessidorBase(VisionDataset):
         # Load image
         img_path = os.path.join(self.root, "IMAGES", fname)
         img = Image.open(img_path)
-        if self.transform is not None:
-            img = self.transform(img)
+        if self.transforms_pytorch is not None:
+            img = self.transforms_pytorch(img)
 
         sample = {}
         sample["idx"] = index
