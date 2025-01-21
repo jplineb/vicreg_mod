@@ -151,13 +151,14 @@ def main():
         gpu=gpu,
         # transforms_pytorch="RGB",
     )
+    num_classes = dataset.num_classes
     train_loader = dataset.get_dataloader(split="train")
     val_loader = dataset.get_dataloader(split="valid")
 
     # Construct model
     model = LoadVICRegModel(args.arch)
     model.load_pretrained_weights(args.pretrained_path)
-    model.modify_head(num_classes=13)
+    model.modify_head(num_classes=num_classes)
     model = model.produce_model()
     model.cuda(gpu)
 

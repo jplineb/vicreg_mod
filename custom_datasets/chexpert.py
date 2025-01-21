@@ -13,6 +13,7 @@ logger = configure_logging()
 
 
 class Chexpert:
+    num_classes = 14
     """
     Chexpert paper: https://arxiv.org/pdf/1901.07031.pdf
 
@@ -34,7 +35,7 @@ class Chexpert:
     def __init__(
         self,
         percent=100,
-        transforms_pytorch="default",
+        transforms_pytorch="RGB",
         batch_size=64,
         num_workers=0,
         gpu=None,

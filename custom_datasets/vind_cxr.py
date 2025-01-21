@@ -253,6 +253,7 @@ class VINDR_CXR_BASE(VisionDataset):
 
 
 class VINDR_CXR:
+    num_classes = 13
     def __init__(
         self,
         path_to_vindcxr: str = "/project/dane2/wficai/BenchMD/vindr-cxr/1.0.0/",

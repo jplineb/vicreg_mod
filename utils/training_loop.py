@@ -23,6 +23,7 @@ class TrainingLoop:
         args,
         stats_file=None,
         gpu=0,
+        multi_label: bool = True,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -33,6 +34,7 @@ class TrainingLoop:
         self.args = args
         self.stats_file = stats_file
         self.gpu = gpu
+        self.multi_label = multi_label
         self.start_time = time.time()
 
     def train_epoch(self, epoch):
@@ -103,17 +105,56 @@ class TrainingLoop:
                 all_targets += target.cpu()
                 all_valid_loss.append(valid_loss.item())
 
-        all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
-            self.calculate_validation_stats(
-                epoch, all_outputs, all_targets, all_valid_loss
+        if self.multi_label:
+            all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
+                self.calculate_multi_label_validation_stats(
+                    epoch, all_outputs, all_targets, all_valid_loss
+                )
             )
-        )
+        else:
+            all_auc, avg_auc_all = (
+                self.calculate_single_label_validation_stats(
+                    epoch, all_outputs, all_targets, all_valid_loss
+                )
+            )
         del all_outputs
         del all_targets
 
         return all_auc, avg_auc_all
+    
+    def calculate_single_label_validation_stats(
+        self, epoch: int, all_outputs, all_targets, all_valid_loss
+    ):
+        """Calculate and log validation statistics"""
+        all_auc, avg_auc_all = (
+            self.dataset_handler.calculate_auc(all_outputs, all_targets)
+        )
+        avg_valid_loss = np.average(all_valid_loss)
 
-    def calculate_validation_stats(
+        stats = dict(
+            epoch=epoch,
+            all_auc=all_auc.tolist(),
+            avg_auc=avg_auc_all,
+            validation_loss=avg_valid_loss,
+        )
+
+        wandb.log(
+            {
+                "epoch": epoch,
+                "avg_auc": stats["avg_auc"],
+                "all_auc": stats["all_auc"],
+                "validation_loss": stats["validation_loss"],
+            }
+        )
+
+        logger.info(json.dumps(stats))
+        if self.stats_file:
+            logger.info(json.dumps(stats), file=self.stats_file)
+
+        return all_auc, avg_auc_all
+        
+
+    def calculate_multi_label_validation_stats(
         self, epoch: int, all_outputs, all_targets, all_valid_loss
     ):
         """Calculate and log validation statistics"""

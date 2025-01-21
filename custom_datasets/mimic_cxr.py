@@ -321,6 +321,7 @@ class MIMIC_CXR_BASE(VisionDataset):
 
 
 class MIMIC_CXR:
+    num_classes = 14
 
     def __init__(
         self,
