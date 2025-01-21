@@ -207,8 +207,8 @@ class Messidor:
         outputs = torch.stack(outputs)
         targets = torch.stack(targets).long()
 
-        au_roc = AUROC(task="multiclass", num_classes=5, average=None)
-        au_roc_average = AUROC(task="multiclass", num_classes=5)
+        au_roc = AUROC(task="multiclass", num_classes=self.num_classes, average=None)
+        au_roc_average = AUROC(task="multiclass", num_classes=self.num_classes)
 
         auc_calc_all = au_roc(outputs, targets)
         auc_calc_avg = au_roc_average(outputs, targets)

@@ -1,12 +1,12 @@
+from matplotlib import pyplot as plt
+from torchmetrics import AUROC
 from torchvision import transforms
 from torchvision.datasets import VisionDataset
 import pandas as pd
 import numpy as np
 import os
 from PIL import Image
-from utils.input_spec import Input2dSpec
 import torch
-from typing import Any
 
 class BCN20000Base(VisionDataset):
     """
@@ -14,8 +14,6 @@ class BCN20000Base(VisionDataset):
     
     After download, put your files under a folder called isic2019, then under a folder called dermatology under your data root.
     """
-    LABEL_FRACS = {'small': 8, 'medium': 64, 'large': 256, 'full': np.inf}
-
     # mean: tensor([0.6678, 0.5298, 0.5245])
     # std:  tensor([0.2231, 0.2029, 0.2145])
     input_size = (224, 224)
@@ -25,7 +23,7 @@ class BCN20000Base(VisionDataset):
     classes = ['MEL', 'NV', 'BCC', 'AKIEC', 'OTHER']
     label_fracs = {'small': 8, 'medium': 64, 'large': 256, 'full': np.inf}
 
-    def __init__(self, root: str, download: bool = False, split: str = "train", transforms_pytorch: str | None | transforms.Compose = "default") -> None:
+    def __init__(self, root: str, split: str = "train", transforms_pytorch: str | None | transforms.Compose = "default") -> None:
         super().__init__()
         self.root = root
         self.split = split
@@ -52,7 +50,7 @@ class BCN20000Base(VisionDataset):
     def __len__(self) -> int:
         return len(self.index_file)
 
-    def __getitem__(self, index: int) -> Any:
+    def __getitem__(self, index: int) -> dict:
         df_row = self.index_file.iloc[index]
         fname = df_row["image_name"]
         label = df_row[self.classes].values
@@ -83,16 +81,6 @@ class BCN20000Base(VisionDataset):
         sample["img"] = img.float()
 
         return sample
-
-    @staticmethod
-    def num_classes():
-        return BCN20000Base.num_classes
-
-    @staticmethod
-    def spec():
-        return [
-            Input2dSpec(input_size=BCN20000Base.input_size, patch_size=BCN20000Base.patch_size, in_channels=BCN20000Base.in_channels),
-        ]
 
 class BCN20000:
     """ISIC2019 (BCN_20000)Dataset has a goal of classifying dermoscopic images among nine different diagnostic categories. 25,331 images are available for training across 8 different categories. We transformed them into 5 classes."""
@@ -150,4 +138,56 @@ class BCN20000:
         print('Done')
 
     def get_dataset(self, split="train"):
-        pass
+        if split == "train":
+            d_bcn_20000 = BCN20000Base(self.root, split="train", transforms_pytorch=self.transforms)
+        elif split == "valid":
+            d_bcn_20000 = BCN20000Base(self.root, split="valid", transforms_pytorch=self.transforms)
+        else:
+            raise ValueError(f"Invalid split: {split}")
+        return d_bcn_20000
+    
+    def get_dataloader(self, split:str = "train") -> torch.utils.data.DataLoader:
+        d_bcn_20000 = self.get_dataset(split)
+        dataloader = torch.utils.data.DataLoader(
+            d_bcn_20000,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+        )
+        return dataloader
+
+    def check_dataset(self, idx: int = 1, split: str = "train") -> None:
+        # Get idx
+        instance = self.get_dataset(split=split)[idx]
+        # Print labels
+        print(f"labels: {instance['lab']}")
+        try:
+            # Show image
+            plt.imshow(instance["img"].squeeze())
+        except:
+            # Transpose dimensions if necessary
+            plt.imshow(instance["img"].transpose(2, 0))
+    
+    def check_dataloader(self, split: str = "train") -> None:
+        print(next(iter(self.get_dataloader(split))))
+    
+    def calculate_loss(
+        self, predictions: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        loss_func = torch.nn.CrossEntropyLoss().cuda(self.gpu)
+        loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).long())
+        return loss
+    
+    def calculate_auc(self, outputs, targets):
+        # Calculate AUROC
+        # import pdb; pdb.set_trace()
+        outputs = torch.stack(outputs)
+        targets = torch.stack(targets).long()
+
+        au_roc = AUROC(task="multiclass", num_classes=self.num_classes, average=None)
+        au_roc_average = AUROC(task="multiclass", num_classes=self.num_classes)
+
+        auc_calc_all = au_roc(outputs, targets)
+        auc_calc_avg = au_roc_average(outputs, targets)
+
+        return auc_calc_all, auc_calc_avg
