@@ -7,6 +7,7 @@ import numpy as np
 import os
 from PIL import Image
 import torch
+import torch.nn.functional as F
 
 
 class BCN20000Base(VisionDataset):
@@ -224,6 +225,10 @@ class BCN20000:
 
         # Convert one-hot encoded targets to class indices
         targets = torch.argmax(targets, dim=1).long()  # Now shape = [N]
+
+        # Apply softmax to outputs
+        # NOTE: this is not needed, since the loss function is already a softmax
+        outputs = F.softmax(outputs, dim=1)
 
         au_roc = AUROC(task="multiclass", num_classes=self.num_classes, average=None)
         au_roc_average = AUROC(task="multiclass", num_classes=self.num_classes)
