@@ -201,7 +201,7 @@ class Messidor:
         loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).long())
         return loss
 
-    def calculate_auc(self, outputs, targets):
+    def calculate_auc(self, outputs, targets) -> tuple[torch.Tensor, torch.Tensor]:
         # Calculate AUROC
         # import pdb; pdb.set_trace()
         outputs = torch.stack(outputs)
