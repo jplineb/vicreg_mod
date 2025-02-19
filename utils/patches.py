@@ -4,7 +4,7 @@ from utils.logging import configure_logging
 
 logger = configure_logging()
 
-WANDB_ON = False
+WANDB_ON = True
 def log_stats(stats):
     if WANDB_ON:
         wandb.log(stats)

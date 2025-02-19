@@ -107,6 +107,7 @@ class BCN20000:
     in_channels = 3
     num_classes = 5
     classes = ["MEL", "NV", "BCC", "AKIEC", "OTHER"]
+    multi_label = False
 
     def __init__(
         self,

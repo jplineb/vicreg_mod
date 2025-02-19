@@ -1,4 +1,3 @@
-import gc
 import os
 import time
 import json
@@ -37,14 +36,16 @@ class TrainingLoop:
         self.multi_label = multi_label
         self.start_time = time.time()
 
+        if not os.path.exists(self.args.exp_dir):
+            os.makedirs(self.args.exp_dir)
+        
     def train_epoch(self, epoch):
         """Run one epoch of training"""
-        if self.args.weights == "finetune":
-            self.model.train()
-        elif self.args.weights == "freeze":
-            self.model.eval()
-        else:
-            assert False
+        self.model.train()
+
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                logger.debug(f"Gradients computed for {name}")
 
         for step, data in enumerate(
             self.train_loader, start=epoch * len(self.train_loader)
@@ -74,7 +75,6 @@ class TrainingLoop:
                     time=int(time.time() - self.start_time),
                 )
                 log_stats(stats)
-                logger.debug(gc.get_stats())
                 logger.info(json.dumps(stats))
                 if self.stats_file:
                     logger.info(json.dumps(stats), file=self.stats_file)

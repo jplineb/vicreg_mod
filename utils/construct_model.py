@@ -2,7 +2,12 @@ from typing import OrderedDict
 import torch
 import torch.nn as nn
 import resnet
+from torchvision.models import ResNet50_Weights, resnet50
+import resnet
 
+from utils.logging import configure_logging
+
+logger = configure_logging()
 
 class ConstructModel:
     def __init__(self, pretrained_weights=None):
@@ -73,6 +78,7 @@ class LoadVICRegModel:
     def __init__(self, arch):
         print("Loading local VICReg ResNet50 arch Model")
         self.backbone, self.embedding = resnet.__dict__[arch](zero_init_residual=True)
+        logger.info("Training VICReg Model")
 
     def load_pretrained_weights(self, pretrained_path: str):
         # Get state dict
@@ -93,5 +99,72 @@ class LoadVICRegModel:
         self.head.weight.data.normal_(mean=0.0, std=0.01)
         self.head.bias.data.zero_()
 
+    def freeze_backbone(self):
+        """
+        Freezes the backbone parameters to prevent them from being updated during training.
+        """
+        self.backbone.requires_grad_(False)
+        self.head.requires_grad_(True)
+
     def produce_model(self):
         return nn.Sequential(self.backbone, self.head)
+
+class LoadSupervisedModel:
+    def __init__(self, arch='resnet50'):
+        """
+        Initializes the supervised pretrained model.
+
+        Args:
+            arch (str): Architecture name. Default is 'resnet50'
+        """
+        self.arch = arch
+        self.backbone = None
+        self.head = None
+        logger.info("Training Supervised Model")
+
+    def load_pretrained_weights(self, pretrained_dataset: str, pretrained_path: str | None = None):
+        if pretrained_dataset == "ImageNet":
+            print("Initializing ResNet50 Model with ImageNet Weights")
+            weights = ResNet50_Weights.IMAGENET1K_V2
+            self.backbone = resnet50(weights=weights)
+            self.backbone.fc = nn.Identity()
+        elif pretrained_dataset == "RadImageNet":
+            if pretrained_path is None:
+                raise ValueError(f"Must specify pretrained path for {pretrained_dataset}")
+            print("Initializing ResNet50 Model with RadImageNet Weights")
+            pretrained_state_dict = torch.load(pretrained_path, map_location="cpu")
+            self.backbone = resnet50(weights=pretrained_state_dict["state_dict"])  # Initialize without predefined weights
+            # self.backbone.load_state_dict(pretrained_state_dict["state_dict"])
+            self.backbone.fc = nn.Identity()
+        # else:
+        #     raise ValueError(f"Unsupported pretrained_dataset: {pretrained_dataset}")
+
+    def modify_head(self, num_classes: int):
+        """
+        Modifies the head of the model for the desired number of classes.
+
+        Args:
+            num_classes (int): Number of output classes.
+        """
+        self.head = nn.Linear(2048, num_classes)
+        self.head.weight.data.normal_(mean=0.0, std=0.01)
+        self.head.bias.data.zero_()
+
+    def freeze_backbone(self):
+        """
+        Freezes the backbone parameters to prevent them from being updated during training.
+        """
+        self.backbone.requires_grad_(False)
+        self.head.requires_grad_(True)
+        
+    def produce_model(self) -> nn.Module:
+        """
+        Combines the backbone and head into a single model.
+
+        Returns:
+            torch.nn.Module: The combined model.
+        """
+        if self.head is None:
+            raise ValueError("Head is not initialized. Call modify_head() first.")
+        model = nn.Sequential(self.backbone, self.head)
+        return model

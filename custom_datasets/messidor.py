@@ -7,6 +7,7 @@ from PIL import Image
 from custom_datasets.dataset_utils.input_spec import Input2dSpec
 from torchvision.datasets import VisionDataset
 from torchmetrics import AUROC
+from sklearn.model_selection import StratifiedKFold
 
 
 class MessidorBase(VisionDataset):
@@ -86,6 +87,7 @@ class Messidor:
     input_size = (224, 224)
     patch_size = (16, 16)
     in_channels = 3
+    multi_label = False
 
     def __init__(
         self,
@@ -154,6 +156,58 @@ class Messidor:
         valid_df.to_csv(valid_df_path)
 
         print("Done \n\n")
+
+    def build_index_cv(self, k: int = 4):
+        """
+        Builds k-fold cross-validation indices with balanced class distribution using sklearn's StratifiedKFold.
+        Saves the splits in cv_splits folder as {fold}_{split}_index.csv
+        
+        Args:
+            k (int): Number of folds for cross-validation. Defaults to 4.
+        """
+        print(f"Building {k}-fold cross-validation indices...")
+        
+        # Create cv_splits directory if it doesn't exist
+        cv_splits_dir = os.path.join(self.root, "cv_splits")
+        os.makedirs(cv_splits_dir, exist_ok=True)
+        
+        # Load and clean data
+        image_info = os.path.join(self.root, "messidor_data.csv")
+        df = pd.read_csv(image_info, header=0, usecols=[0, 1])
+        df = df.dropna()
+        df = df.apply(lambda row: self.edit_ext(row), axis=1)
+        
+        # Initialize StratifiedKFold
+        skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+        
+        # Get features (X) and labels (y)
+        X = df.index.values
+        y = df["adjudicated_dr_grade"].values
+        
+        # Generate and save splits
+        for fold, (train_idx, valid_idx) in enumerate(skf.split(X, y)):
+            # Create train and validation dataframes
+            train_df = df.iloc[train_idx].reset_index()
+            valid_df = df.iloc[valid_idx].reset_index()
+            
+            # Save files
+            train_path = os.path.join(cv_splits_dir, f"fold{fold}_train_index.csv")
+            valid_path = os.path.join(cv_splits_dir, f"fold{fold}_valid_index.csv")
+            
+            print(f"Saving fold {fold} train index to {train_path}")
+            print(f"Saving fold {fold} valid index to {valid_path}")
+            
+            # Save class distribution information
+            train_dist = train_df["adjudicated_dr_grade"].value_counts().sort_index()
+            valid_dist = valid_df["adjudicated_dr_grade"].value_counts().sort_index()
+            print(f"\nFold {fold} class distribution:")
+            print(f"Train: {dict(train_dist)}")
+            print(f"Valid: {dict(valid_dist)}\n")
+            
+            train_df.to_csv(train_path, index=False)
+            valid_df.to_csv(valid_path, index=False)
+        
+        print("Cross-validation splits created successfully\n")
 
     def get_dataset(self, split: str = "train") -> MessidorBase:
         if split == "train":

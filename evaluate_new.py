@@ -6,8 +6,9 @@ import torch
 import torch.optim as optim
 import wandb
 
+from utils.patches import WANDB_ON
 from utils.logging import configure_logging
-from utils.construct_model import LoadVICRegModel
+from utils.construct_model import LoadVICRegModel, LoadSupervisedModel
 from utils.training_loop import TrainingLoop
 from custom_datasets import DATASETS
 
@@ -22,7 +23,6 @@ def get_arguments():
     parser.add_argument(
         "--task_ds",
         type=str,
-        choices=["chexpert", "vinddrcxr"],
         required=True,
     )
     # Checkpoint
@@ -42,7 +42,7 @@ def get_arguments():
         help="path to checkpoint directory",
     )
     parser.add_argument(
-        "--print-freq", default=100, type=int, metavar="N", help="print frequency"
+        "--print-freq", default=50, type=int, metavar="N", help="print frequency"
     )
     parser.add_argument("--run-id", type=str, required=False)
 
@@ -97,6 +97,13 @@ def get_arguments():
         choices=("finetune", "freeze"),
         help="finetune or freeze resnet weights",
     )
+    parser.add_argument(
+        "--warmup-epochs",
+        default=3,
+        type=int,
+        metavar="N",
+        help="number of warmup epochs",
+    )
 
     # Running
     parser.add_argument(
@@ -109,6 +116,33 @@ def get_arguments():
 
     return parser
 
+def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:
+    """
+    Create a scheduler that warms up the learning rate linearly for a few epochs,
+    then decays it using a cosine schedule.
+    """
+    warmup_epochs = warmup_epochs
+    
+    # Create warmup scheduler
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-4,  # Start at 0.01% of base lr
+        end_factor=1.0,     # End at 100% of base lr
+        total_iters=warmup_epochs
+    )
+    
+    # Create cosine scheduler for after warmup
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=1e-6
+    )
+    
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
 
 def environment_setup():
     gc.collect(True)
@@ -120,8 +154,12 @@ def environment_setup():
 
 
 def wandb_init(args):
+    # Create the run name by combining pretrained_how, pretrained_dataset, weights, and task_ds
+    run_name = f"{args.pretrained_how} {args.pretrained_dataset} {args.weights} - {args.task_ds}"
+    logger.info(f"Run name: {run_name}")
     wandb.init(
         project="Cleaned_VICReg_Experiments",
+        name=run_name,
         config={
             "backbone_learning_rate": args.lr_backbone,
             "head_learning_rate": args.lr_head,
@@ -142,7 +180,8 @@ def wandb_init(args):
 def main():
     # Environment setup
     args, gpu = environment_setup()
-    wandb_init(args)
+    if WANDB_ON:
+        wandb_init(args)
 
     # Load dataset and dataloader
     dataset = DATASETS[args.task_ds](
@@ -156,20 +195,26 @@ def main():
     val_loader = dataset.get_dataloader(split="valid")
 
     # Construct model
-    model = LoadVICRegModel(args.arch)
-    model.load_pretrained_weights(args.pretrained_path)
-    model.modify_head(num_classes=num_classes)
+    if args.pretrained_how == "VICReg":
+        model = LoadVICRegModel(args.arch)
+        model.load_pretrained_weights(args.pretrained_path)
+    elif args.pretrained_how == "Supervised":
+        model = LoadSupervisedModel(args.arch)
+        model.load_pretrained_weights(args.pretrained_dataset, args.pretrained_path) 
+    model.modify_head(num_classes=num_classes) # Modify head for number of classes
+    if args.weights == "freeze":
+        model.freeze_backbone()
     model = model.produce_model()
     model.cuda(gpu)
 
     # Train/Eval loop
-    ## Load up param groups
+    # Load up param groups
     param_groups = [dict(params=model[-1].parameters(), lr=args.lr_head)]
     if args.weights == "finetune":
         param_groups.append(dict(params=model[:-1].parameters(), lr=args.lr_backbone))
-    ## Setup optimizer and scheduler
-    optimizer = optim.Adam(param_groups, 0, weight_decay=args.weight_decay)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
+    # Setup optimizer and scheduler
+    optimizer = optim.Adam(param_groups, weight_decay=args.weight_decay)
+    scheduler = create_scheduler(optimizer, args.epochs, args.warmup_epochs)
     training_loop = TrainingLoop(
         model,
         optimizer,
@@ -180,6 +225,7 @@ def main():
         args,
         stats_file=None,
         gpu=gpu,
+        multi_label=False,
     )
     training_loop.train(start_epoch=0, num_epochs=args.epochs)
 
