@@ -1,19 +1,20 @@
 #!/bin/sh
 
-# SBATCH --job-name=train_messidor
-# SBATCH --ntasks=1
-# SBATCH --time=06:00:00
-# SBATCH --cpus-per-task=32
-# SBATCH --mem=125gb
-# SBATCH --gpus=v100s:1
+#SBATCH --job-name=train_vindrcxr
+#SBATCH --ntasks=1
+#SBATCH --time=06:00:00
+#SBATCH --cpus-per-task=48
+#SBATCH --mem=250gb
+#SBATCH --gpus=v100s:1
+#SBATCH --partition="work1"
 
-epochs=30
+epochs=15
 lr_backbone=1e-3
 lr_head=1e-2
 batch_size=64
 weightdecay=1e-6
-workers=16
-warmup_epochs=5
+workers=48
+warmup_epochs=3
 echo "----------------------------"
 echo "Executing on host: "$HOSTNAME
 echo "Performing Experiments"
@@ -22,13 +23,12 @@ echo "----------------------------"
 # Load modules
 module load miniforge3/24.3.0-0
 module load cuda/12.3
-module list
 
 source activate disres
 cd /home/jplineb/VICReg/vicreg_mod/
 
 python evaluate_new.py \
-    --task_ds messidor \
+    --task_ds vindrcxr \
     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
     --exp-dir ./checkpoint/try_new_script \
     --pretrained-how VICReg \
@@ -42,7 +42,7 @@ python evaluate_new.py \
     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how VICReg \
@@ -56,7 +56,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how VICReg \
@@ -70,7 +70,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how VICReg \
@@ -84,7 +84,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how Supervised \
@@ -98,7 +98,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path "/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"\
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how Supervised \
@@ -112,7 +112,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how Supervised \
@@ -126,7 +126,7 @@ python evaluate_new.py \
 #     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
-#     --task_ds messidor \
+#     --task_ds vindrcxr \
 #     --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
 #     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how Supervised \
@@ -138,87 +138,3 @@ python evaluate_new.py \
 #     --batch-size $batch_size \
 #     --workers $workers \
 #     --warmup-epochs $warmup_epochs
-
-
-########################################################
-
-### LR TUNNING ###
-########################################################
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "finetune"  \
-#     --lr-backbone 5e-6 \
-#     --lr-head 1e-4\
-#     --batch-size $batch_size \
-#     --workers 12
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "finetune"  \
-#     --lr-backbone 1e-5 \
-#     --lr-head 1e-4\
-#     --batch-size $batch_size \
-#     --workers 12
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "finetune"  \
-#     --lr-backbone 1e-4 \
-#     --lr-head 1e-4\
-#     --batch-size $batch_size \
-#     --workers 12
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "finetune"  \
-#     --lr-backbone 1e-3 \
-#     --lr-head 1e-4\
-#     --batch-size $batch_size \
-#     --workers 12
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "finetune"  \
-#     --lr-backbone 1e-3 \
-#     --lr-head 1e-3 \
-#     --batch-size $batch_size \
-#     --workers 16
-
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs 20 \
-#     --weights "freeze"  \
-#     --lr-backbone 1e-3 \
-#     --lr-head 1e-3 \
-#     --batch-size $batch_size \
-#     --workers 16

@@ -3,6 +3,8 @@ import time
 import json
 import numpy as np
 import torch
+import torch.optim as optim
+
 from datetime import datetime
 
 from utils.logging import configure_logging
@@ -162,12 +164,11 @@ class TrainingLoop:
             self.dataset_handler.calculate_auc(all_outputs, all_targets)
         )
         avg_valid_loss = np.average(all_valid_loss)
-
         stats = dict(
             epoch=epoch,
-            all_auc=auc_dict.tolist(),
-            avg_auc=avg_auc_all.tolist(),
-            avg_auc_of_interest=avg_auc_of_interest.tolist(),
+            all_auc=auc_dict,
+            avg_auc=float(avg_auc_all),
+            avg_auc_of_interest=float(avg_auc_of_interest),
             validation_loss=avg_valid_loss,
         )
 
@@ -204,3 +205,31 @@ class TrainingLoop:
                 scheduler=self.scheduler.state_dict(),
             )
             torch.save(state, os.path.join(self.args.exp_dir, "checkpoint.pth"))
+
+def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:
+    """
+    Create a scheduler that warms up the learning rate linearly for a few epochs,
+    then decays it using a cosine schedule.
+    """
+    warmup_epochs = warmup_epochs
+    
+    # Create warmup scheduler
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-4,  # Start at 0.01% of base lr
+        end_factor=1.0,     # End at 100% of base lr
+        total_iters=warmup_epochs
+    )
+    
+    # Create cosine scheduler for after warmup
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=1e-6 # minimum learning rate
+    )
+    
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )

@@ -9,8 +9,8 @@ from .bcn_20000 import *
 
 DATASETS = {
     "chexpert": Chexpert,
-    "vinddrcxr": VINDR_CXR,
-    "mimic_cxr": MIMIC_CXR,
+    "vindrcxr": VINDR_CXR,
+    "mimiccxr": MIMIC_CXR,
     "radimagenet": RadImageNet,
     "messidor": Messidor,
     "bcn_20000": BCN20000,

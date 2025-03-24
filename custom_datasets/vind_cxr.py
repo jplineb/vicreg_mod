@@ -121,14 +121,15 @@ class VINDR_CXR_BASE(VisionDataset):
             # )
 
             # Drop duplicates, assume first is ground truth
-            # self.index_file = self.index_file.drop_duplicates(
-            #     subset=["fname"], keep="first"
-            # )
+            self.index_file = index_file.drop_duplicates(
+                subset=["fname"], keep="first"
+            )
 
             # Drop duplicates, use majority vote
-            self.index_file = (
-                index_file.groupby(by=["fname"]).mean().round().reset_index()
-            )
+            # import pdb; pdb.set_trace()
+            # self.index_file = (
+            #     index_file.groupby(by=["fname"]).mean().round().reset_index()
+            # )
 
     def read_dicom(self, file_path: str, imsize: int):
         """Read pixel array from a DICOM file and apply recale and resize
@@ -254,6 +255,8 @@ class VINDR_CXR_BASE(VisionDataset):
 
 class VINDR_CXR:
     num_classes = 13
+    multi_label = True
+
     def __init__(
         self,
         path_to_vindcxr: str = "/project/dane2/wficai/BenchMD/vindr-cxr/1.0.0/",

@@ -25,6 +25,7 @@ class BCN20000Base(VisionDataset):
     num_classes = 5
     classes = ["MEL", "NV", "BCC", "AKIEC", "OTHER"]
     label_fracs = {"small": 8, "medium": 64, "large": 256, "full": np.inf}
+    multi_label = False
 
     def __init__(
         self,

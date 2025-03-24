@@ -30,6 +30,13 @@ def get_arguments():
         description="Pretrain a resnet model with VICReg", add_help=False
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility",
+    )
+
     # Data
     parser.add_argument(
         "--data-dir",

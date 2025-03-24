@@ -1,7 +1,9 @@
 import argparse
 from pathlib import Path
 import gc
+import random
 
+import numpy as np
 import torch
 import torch.optim as optim
 import wandb
@@ -9,7 +11,7 @@ import wandb
 from utils.patches import WANDB_ON
 from utils.logging import configure_logging
 from utils.construct_model import LoadVICRegModel, LoadSupervisedModel
-from utils.training_loop import TrainingLoop
+from utils.training_loop import TrainingLoop, create_scheduler
 from custom_datasets import DATASETS
 
 logger = configure_logging()
@@ -19,7 +21,12 @@ def get_arguments():
     parser = argparse.ArgumentParser(
         description="Evaluate a pretrained model on ImageNet"
     )
-
+    parser.add_argument(
+        "--seed",
+        default=42,
+        type=int,
+        help="random seed",
+    )
     parser.add_argument(
         "--task_ds",
         type=str,
@@ -42,7 +49,7 @@ def get_arguments():
         help="path to checkpoint directory",
     )
     parser.add_argument(
-        "--print-freq", default=50, type=int, metavar="N", help="print frequency"
+        "--print-freq", default=1000, type=int, metavar="N", help="print frequency"
     )
     parser.add_argument("--run-id", type=str, required=False)
 
@@ -116,40 +123,15 @@ def get_arguments():
 
     return parser
 
-def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:
-    """
-    Create a scheduler that warms up the learning rate linearly for a few epochs,
-    then decays it using a cosine schedule.
-    """
-    warmup_epochs = warmup_epochs
-    
-    # Create warmup scheduler
-    warmup_scheduler = optim.lr_scheduler.LinearLR(
-        optimizer,
-        start_factor=1e-4,  # Start at 0.01% of base lr
-        end_factor=1.0,     # End at 100% of base lr
-        total_iters=warmup_epochs
-    )
-    
-    # Create cosine scheduler for after warmup
-    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=total_epochs - warmup_epochs,
-        eta_min=1e-6
-    )
-    
-    return optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[warmup_epochs]
-    )
-
 def environment_setup():
     gc.collect(True)
     gpu = torch.cuda.current_device()
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
     args = get_arguments().parse_args()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
     return args, gpu
 
 
@@ -225,7 +207,7 @@ def main():
         args,
         stats_file=None,
         gpu=gpu,
-        multi_label=False,
+        multi_label=dataset.multi_label,
     )
     training_loop.train(start_epoch=0, num_epochs=args.epochs)
 

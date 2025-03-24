@@ -13,7 +13,8 @@ logger = configure_logging()
 
 
 class Chexpert:
-    num_classes = 14
+    num_classes = 13
+    multi_label = True
     """
     Chexpert paper: https://arxiv.org/pdf/1901.07031.pdf
 
