@@ -9,8 +9,8 @@
 #SBATCH --partition="work1"
 
 epochs=10
-lr_backbone=1e-3
-lr_head=1e-2
+lr_backbone=1e-4
+lr_head=1e-3
 batch_size=64
 weightdecay=1e-6
 workers=48

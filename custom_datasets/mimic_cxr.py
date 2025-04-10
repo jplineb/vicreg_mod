@@ -89,7 +89,7 @@ class MIMIC_CXR_BASE(VisionDataset):
         build_index=True,
         download: bool = True,
         train: bool = True,
-        finetune_size: str = None,
+        finetune_size: str | None = None,
     ):
         # self.root = os.path.join(base_root, 'chest_xray', 'mimic-cxr')
         self.root = base_root

@@ -1,4 +1,5 @@
 import argparse
+import datetime
 from pathlib import Path
 import gc
 import random
@@ -125,13 +126,20 @@ def get_arguments():
 
 def environment_setup():
     gc.collect(True)
+    args = get_arguments().parse_args()
+    # Torch setup
     gpu = torch.cuda.current_device()
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
-    args = get_arguments().parse_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
+
+    # Generate experiment directory
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.exp_dir = Path(f"./checkpoint/{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{timestamp}")
+    args.exp_dir.mkdir(parents=True, exist_ok=True)
+    
     return args, gpu
 
 

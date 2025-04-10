@@ -204,7 +204,17 @@ class TrainingLoop:
                 optimizer=self.optimizer.state_dict(),
                 scheduler=self.scheduler.state_dict(),
             )
-            torch.save(state, os.path.join(self.args.exp_dir, "checkpoint.pth"))
+            
+            # Save with date and epoch number
+            self.save_checkpoint(state, epoch)
+    
+    def save_checkpoint(self, state, epoch: int):
+        """Save checkpoint"""
+        date_str = datetime.now().strftime("%Y%m%d")
+        checkpoint_path = os.path.join(self.args.exp_dir, f"checkpoint_{date_str}_epoch{epoch+1}.pth")
+        torch.save(state, checkpoint_path)
+        logger.info(f"Saved checkpoint to {checkpoint_path}")
+        
 
 def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:
     """

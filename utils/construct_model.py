@@ -188,31 +188,22 @@ class FeatureExtractor:
         """Register forward hooks on the target layers."""
         # For models wrapped in nn.Sequential
         if isinstance(self.model, nn.Sequential):
-            # Handle the case where the backbone is the first element in Sequential
-            if isinstance(self.model[0], nn.Sequential):
-                # If the backbone itself is Sequential (like in frankenstein model)
-                for layer_idx in self.target_layers:
-                    layer = self.model[0][layer_idx]
+        # If using a standard model like ResNet
+            for layer_idx in self.target_layers:
+                # Access the appropriate layer in the ResNet architecture
+                if hasattr(self.model[0], "layer" + str(layer_idx + 1)):
+                    layer = getattr(self.model[0], "layer" + str(layer_idx + 1))
                     self.hooks.append(
                         layer.register_forward_hook(self._get_hook(layer_idx))
                     )
-            else:
-                # If using a standard model like ResNet
-                for layer_idx in self.target_layers:
-                    # Access the appropriate layer in the ResNet architecture
-                    if hasattr(self.model[0], "layer" + str(layer_idx + 1)):
-                        layer = getattr(self.model[0], "layer" + str(layer_idx + 1))
-                        self.hooks.append(
-                            layer.register_forward_hook(self._get_hook(layer_idx))
-                        )
-    
+
     def _get_hook(self, layer_idx):
         """Create a hook function for a specific layer."""
         def hook(module, input, output):
             self.features[layer_idx] = output.detach()
         return hook
     
-    def extract_features(self, x):
+    def extract_features(self, x: torch.Tensor) -> dict:
         """
         Extract features for input x.
         
