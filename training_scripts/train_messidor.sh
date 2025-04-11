@@ -27,24 +27,22 @@ module list
 source activate disres
 cd /home/jplineb/VICReg/vicreg_mod/
 
-python evaluate_new.py \
-    --task_ds messidor \
-    --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-    --exp-dir ./checkpoint/try_new_script \
-    --pretrained-how VICReg \
-    --pretrained-dataset ImageNet \
-    --epochs $epochs \
-    --weights "freeze" \
-    --lr-backbone $lr_backbone \
-    --lr-head $lr_head \
-    --batch-size $batch_size \
-    --workers $workers \
-    --warmup-epochs $warmup_epochs
+# python evaluate_new.py \
+#     --task_ds messidor \
+#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
+#     --pretrained-how VICReg \
+#     --pretrained-dataset ImageNet \
+#     --epochs $epochs \
+#     --weights "freeze" \
+#     --lr-backbone $lr_backbone \
+#     --lr-head $lr_head \
+#     --batch-size $batch_size \
+#     --workers $workers \
+#     --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
 #     --task_ds messidor \
 #     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
 #     --pretrained-how VICReg \
 #     --pretrained-dataset ImageNet \
 #     --epochs $epochs \
@@ -55,19 +53,18 @@ python evaluate_new.py \
 #     --workers $workers \
 #     --warmup-epochs $warmup_epochs
 
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset RadImageNet \
-#     --epochs $epochs \
-#     --weights "finetune" \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers \
-#     --warmup-epochs $warmup_epochs
+python evaluate_new.py \
+    --task_ds messidor \
+    --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
+    --pretrained-how VICReg \
+    --pretrained-dataset RadImageNet \
+    --epochs $epochs \
+    --weights "finetune" \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers \
+    --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
 #     --task_ds messidor \

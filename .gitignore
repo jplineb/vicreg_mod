@@ -14,3 +14,5 @@ notebooks/results.csv
 VICReg_RadImageNet/stats_clean.txt
 *.out
 .snakemake/
+*.png
+*.txt

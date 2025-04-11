@@ -59,7 +59,6 @@ cd /home/jplineb/VICReg/vicreg_mod/
 
 python evaluate_new.py \
     --task_ds chexpert \
-    --exp-dir ./checkpoint/try_new_script \
     --epochs $epochs \
     --lr-backbone $lr_backbone \
     --lr-head $lr_head \

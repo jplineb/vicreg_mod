@@ -436,6 +436,180 @@ def visualize_feature_distributions(features1_all, features2_all, output_dir, la
     plt.close()
 
 
+def visualize_cosine_similarities(cosine_sims, layer_idx, layer_name, output_dir):
+    """
+    Visualize cosine similarities between model features for each sample.
+    
+    Args:
+        cosine_sims (list): List of cosine similarity values for each sample
+        layer_idx (int): Index of the layer
+        layer_name (str): Name of the layer
+        output_dir (Path): Directory to save visualizations
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot cosine similarities
+    sample_indices = list(range(len(cosine_sims)))
+    ax.plot(sample_indices, cosine_sims, 'o-', linewidth=2, markersize=8)
+    
+    # Add horizontal line at mean
+    mean_sim = np.mean(cosine_sims)
+    ax.axhline(y=mean_sim, color='r', linestyle='--', label=f'Mean: {mean_sim:.4f}')
+    
+    # Add labels and title
+    ax.set_xlabel('Sample Index')
+    ax.set_ylabel('Cosine Similarity')
+    ax.set_title(f'Per-Sample Cosine Similarity - Layer {layer_idx} ({layer_name})')
+    
+    # Set y-axis limits to better visualize the similarities
+    y_min = max(min(cosine_sims) - 0.1, -1.0)
+    y_max = min(max(cosine_sims) + 0.1, 1.0)
+    ax.set_ylim(y_min, y_max)
+    
+    # Add grid and legend
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    
+    # Save figure
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'cosine_similarity_per_sample_layer_{layer_idx}.png'), dpi=150)
+    plt.close()
+
+
+def calculate_per_sample_cosine_similarity(features1: torch.Tensor, features2: torch.Tensor) -> list:
+    """
+    Calculate cosine similarity for each sample between two feature tensors.
+    
+    Args:
+        features1 (torch.Tensor): Features from model 1
+        features2 (torch.Tensor): Features from model 2
+        
+    Returns:
+        list: List of cosine similarity values for each sample
+    """
+    # Get batch size
+    batch_size = features1.size(0)
+    
+    # Initialize list to store similarities
+    similarities = []
+    
+    # Calculate similarity for each sample
+    for i in range(batch_size):
+        # Get features for this sample
+        f1 = features1[i].view(-1)  # Flatten all dimensions except batch
+        f2 = features2[i].view(-1)
+        
+        # Normalize features
+        f1_norm = f1 / (f1.norm() + 1e-8)  # Add small epsilon to avoid division by zero
+        f2_norm = f2 / (f2.norm() + 1e-8)
+        
+        # Calculate cosine similarity
+        sim = torch.dot(f1_norm, f2_norm).item()
+        similarities.append(sim)
+    
+    return similarities
+
+
+def visualize_layer_comparison(layer_stats, output_dir):
+    """
+    Visualize comparison metrics across different layers.
+    
+    Args:
+        layer_stats (dict): Dictionary with layer indices as keys and statistics as values
+        output_dir (Path): Directory to save visualizations
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Extract layer indices and names
+    layers = sorted(layer_stats.keys())
+    layer_names = [layer_stats[layer]['name'] for layer in layers]
+    
+    # Extract metrics
+    l2_distances = [layer_stats[layer]['l2_distance'] for layer in layers]
+    cosine_sims = [layer_stats[layer]['cosine_similarity'] for layer in layers]
+    
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Plot L2 distances
+    ax1.plot(layers, l2_distances, 'o-', linewidth=2, markersize=10, color='blue')
+    ax1.set_xlabel('Layer Index')
+    ax1.set_ylabel('L2 Distance')
+    ax1.set_title('L2 Distance Between Models by Layer')
+    ax1.set_xticks(layers)
+    ax1.set_xticklabels(layer_names, rotation=45, ha='right')
+    ax1.grid(True, alpha=0.3)
+    
+    # Add value labels
+    for i, l2 in enumerate(l2_distances):
+        ax1.annotate(f'{l2:.2f}', 
+                    (layers[i], l2),
+                    textcoords="offset points", 
+                    xytext=(0,10), 
+                    ha='center')
+    
+    # Plot Cosine similarities
+    ax2.plot(layers, cosine_sims, 'o-', linewidth=2, markersize=10, color='green')
+    ax2.set_xlabel('Layer Index')
+    ax2.set_ylabel('Cosine Similarity')
+    ax2.set_title('Cosine Similarity Between Models by Layer')
+    ax2.set_xticks(layers)
+    ax2.set_xticklabels(layer_names, rotation=45, ha='right')
+    ax2.grid(True, alpha=0.3)
+    
+    # Add value labels
+    for i, sim in enumerate(cosine_sims):
+        ax2.annotate(f'{sim:.2f}', 
+                    (layers[i], sim),
+                    textcoords="offset points", 
+                    xytext=(0,10), 
+                    ha='center')
+    
+    # Set y-axis limits for cosine similarity
+    ax2.set_ylim(-1.05, 1.05)
+    
+    plt.suptitle('Layer-wise Comparison Between Models', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
+    plt.savefig(os.path.join(output_dir, 'layer_comparison.png'), dpi=150)
+    plt.close()
+    
+    # Create a bar chart version for better comparison
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # L2 distance bar chart
+    ax1.bar(layer_names, l2_distances, color='skyblue')
+    ax1.set_ylabel('L2 Distance')
+    ax1.set_title('L2 Distance Between Models by Layer')
+    ax1.set_xticklabels(layer_names, rotation=45, ha='right')
+    
+    # Add value labels
+    for i, l2 in enumerate(l2_distances):
+        ax1.text(i, l2 + max(l2_distances)*0.02, f'{l2:.2f}', ha='center')
+    
+    # Cosine similarity bar chart
+    ax2.bar(layer_names, cosine_sims, color='lightgreen')
+    ax2.set_ylabel('Cosine Similarity')
+    ax2.set_title('Cosine Similarity Between Models by Layer')
+    ax2.set_xticklabels(layer_names, rotation=45, ha='right')
+    
+    # Add value labels
+    for i, sim in enumerate(cosine_sims):
+        ax2.text(i, sim + 0.05 if sim > 0 else sim - 0.1, f'{sim:.2f}', ha='center')
+    
+    # Set y-axis limits for cosine similarity
+    ax2.set_ylim(-1.05, 1.05)
+    
+    plt.suptitle('Layer-wise Comparison Between Models (Bar Chart)', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
+    plt.savefig(os.path.join(output_dir, 'layer_comparison_bar.png'), dpi=150)
+    plt.close()
+
+
 def main():
     args = get_arguments()
 
@@ -486,6 +660,9 @@ def main():
     all_features1_by_layer = {layer: [] for layer in target_layers}
     all_features2_by_layer = {layer: [] for layer in target_layers}
     
+    # Lists to store per-sample cosine similarities for each layer
+    per_sample_cosine_sims = {layer: [] for layer in target_layers}
+    
     processed_samples = 0
 
     for batch_idx, data in enumerate(test_loader):
@@ -511,6 +688,10 @@ def main():
             # Store features for distribution visualization
             all_features1_by_layer[layer_idx].append(features1[layer_idx].clone())
             all_features2_by_layer[layer_idx].append(features2[layer_idx].clone())
+            
+            # Calculate per-sample cosine similarities
+            batch_sims = calculate_per_sample_cosine_similarity(features1[layer_idx], features2[layer_idx])
+            per_sample_cosine_sims[layer_idx].extend(batch_sims)
             
             # Log statistics for this layer
             stats = calculate_statistics(features1[layer_idx], features2[layer_idx])
@@ -566,8 +747,20 @@ def main():
                 layer_idx,
                 layer_name
             )
+            
+            # Visualize per-sample cosine similarities
+            if layer_idx in per_sample_cosine_sims and per_sample_cosine_sims[layer_idx]:
+                logger.info(f"Generating cosine similarity visualizations for layer {layer_idx} ({layer_name})...")
+                visualize_cosine_similarities(
+                    per_sample_cosine_sims[layer_idx],
+                    layer_idx,
+                    layer_name,
+                    layer_output_dir
+                )
 
-    # Calculate and save average statistics for each layer
+    # Prepare data for layer comparison visualization
+    layer_comparison_stats = {}
+    
     for layer_idx in target_layers:
         if layer_idx in all_stats_by_layer and all_stats_by_layer[layer_idx]:
             # Get layer name
@@ -578,7 +771,14 @@ def main():
             avg_stats = {
                 key: np.mean([stat[key] for stat in layer_stats]) for key in layer_stats[0].keys()
             }
-
+            
+            # Store for layer comparison visualization
+            layer_comparison_stats[layer_idx] = {
+                'name': layer_name,
+                'l2_distance': avg_stats['l2_distance'],
+                'cosine_similarity': avg_stats['cosine_similarity']
+            }
+            
             # Create layer-specific output directory
             layer_output_dir = os.path.join(args.output_dir, f"layer_{layer_idx}_{layer_name}")
             if not os.path.exists(layer_output_dir):
@@ -596,6 +796,11 @@ def main():
             logger.info(f"Layer {layer_idx} ({layer_name}) - Average cosine similarity: {avg_stats['cosine_similarity']:.4f}")
         else:
             logger.warning(f"No statistics collected for layer {layer_idx}")
+
+    # Generate layer comparison visualization if we have multiple layers
+    if len(layer_comparison_stats) > 1:
+        logger.info("Generating layer comparison visualization...")
+        visualize_layer_comparison(layer_comparison_stats, args.output_dir)
 
     # Also save a summary file with statistics from all layers
     with open(os.path.join(args.output_dir, "all_layers_summary.txt"), "w") as f:
