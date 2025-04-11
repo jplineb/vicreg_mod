@@ -3,14 +3,14 @@ import datetime
 from pathlib import Path
 import gc
 import random
-
+import git
 import numpy as np
 import torch
 import torch.optim as optim
 import wandb
 
 from utils.patches import WANDB_ON
-from utils.logging import configure_logging
+from utils.log_config import configure_logging
 from utils.construct_model import LoadVICRegModel, LoadSupervisedModel
 from utils.training_loop import TrainingLoop, create_scheduler
 from custom_datasets import DATASETS
@@ -41,13 +41,6 @@ def get_arguments():
         "--resume",
         action="store_true",
         help="Continue from previous epoch if crash occurs",
-    )
-    parser.add_argument(
-        "--exp-dir",
-        default="./checkpoint/unfrozen_chexpert_AP_PA/",
-        type=Path,
-        metavar="DIR",
-        help="path to checkpoint directory",
     )
     parser.add_argument(
         "--print-freq", default=1000, type=int, metavar="N", help="print frequency"
@@ -137,9 +130,10 @@ def environment_setup():
 
     # Generate experiment directory
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.exp_dir = Path(f"./checkpoint/{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{timestamp}")
+    repo = git.Repo(".", search_parent_directories=True)
+    repo_root = Path(repo.working_tree_dir)
+    args.exp_dir = repo_root / "checkpoint" / f"{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{timestamp}"
     args.exp_dir.mkdir(parents=True, exist_ok=True)
-    
     return args, gpu
 
 

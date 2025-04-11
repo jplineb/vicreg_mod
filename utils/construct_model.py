@@ -5,7 +5,7 @@ import resnet
 from torchvision.models import ResNet50_Weights, resnet50
 import resnet
 
-from utils.logging import configure_logging
+from utils.log_config import configure_logging
 
 logger = configure_logging()
 
@@ -168,61 +168,3 @@ class LoadSupervisedModel:
             raise ValueError("Head is not initialized. Call modify_head() first.")
         model = nn.Sequential(self.backbone, self.head)
         return model
-
-class FeatureExtractor:
-    def __init__(self, model, target_layers):
-        """
-        Initialize feature extractor for a given model.
-        
-        Args:
-            model (nn.Module): The model to extract features from
-            target_layers (list): List of layer indices to extract features from
-        """
-        self.model = model
-        self.target_layers = target_layers
-        self.features = {layer: None for layer in target_layers}
-        self.hooks = []
-        self._register_hooks()
-        
-    def _register_hooks(self):
-        """Register forward hooks on the target layers."""
-        # For models wrapped in nn.Sequential
-        if isinstance(self.model, nn.Sequential):
-        # If using a standard model like ResNet
-            for layer_idx in self.target_layers:
-                # Access the appropriate layer in the ResNet architecture
-                if hasattr(self.model[0], "layer" + str(layer_idx + 1)):
-                    layer = getattr(self.model[0], "layer" + str(layer_idx + 1))
-                    self.hooks.append(
-                        layer.register_forward_hook(self._get_hook(layer_idx))
-                    )
-
-    def _get_hook(self, layer_idx):
-        """Create a hook function for a specific layer."""
-        def hook(module, input, output):
-            self.features[layer_idx] = output.detach()
-        return hook
-    
-    def extract_features(self, x: torch.Tensor) -> dict:
-        """
-        Extract features for input x.
-        
-        Args:
-            x (torch.Tensor): Input tensor
-            
-        Returns:
-            dict: Dictionary of features for each target layer
-        """
-        # Reset features
-        self.features = {layer: None for layer in self.target_layers}
-        # Forward pass
-        self.model.eval()
-        with torch.no_grad():
-            self.model(x)
-        return self.features
-    
-    def remove_hooks(self):
-        """Remove all registered hooks."""
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []

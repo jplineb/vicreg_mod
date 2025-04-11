@@ -7,7 +7,7 @@ import numpy as np
 
 from torchmetrics import AUROC
 
-from utils.logging import configure_logging
+from utils.log_config import configure_logging
 
 logger = configure_logging()
 

@@ -1,6 +1,6 @@
 import json
 import wandb
-from utils.logging import configure_logging
+from utils.log_config import configure_logging
 
 logger = configure_logging()
 

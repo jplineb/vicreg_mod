@@ -7,7 +7,7 @@ import torch.optim as optim
 
 from datetime import datetime
 
-from utils.logging import configure_logging
+from utils.log_config import configure_logging
 from utils.patches import log_stats
 
 logger = configure_logging()
