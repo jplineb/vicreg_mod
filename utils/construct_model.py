@@ -133,7 +133,7 @@ class LoadSupervisedModel:
                 raise ValueError(f"Must specify pretrained path for {pretrained_dataset}")
             print("Initializing ResNet50 Model with RadImageNet Weights")
             pretrained_state_dict = torch.load(pretrained_path, map_location="cpu")
-            self.backbone = resnet50(weights=pretrained_state_dict["state_dict"])  # Initialize without predefined weights
+            self.backbone = resnet50(weights=pretrained_state_dict["state_dict"])
             # self.backbone.load_state_dict(pretrained_state_dict["state_dict"])
             self.backbone.fc = nn.Identity()
         # else:
@@ -156,6 +156,9 @@ class LoadSupervisedModel:
         """
         self.backbone.requires_grad_(False)
         self.head.requires_grad_(True)
+        # Set assert to check that the backbone is frozen
+        assert self.backbone.requires_grad == False
+        assert self.head.requires_grad == True
         
     def produce_model(self) -> nn.Module:
         """

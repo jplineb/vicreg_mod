@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import os
 import json
+import re
 
 from custom_datasets import DATASETS
 from torchvision.models import resnet50
@@ -108,17 +109,19 @@ def load_model(model_path):
     # Replace the final FC layer with Identity for feature extraction
     model.fc = nn.Identity()  # type: ignore
 
-    # Process state dict keys if needed (remove prefixes like 'backbone.')
+    # Process state dict keys if needed (remove prefixes like 'backbone.' or '0.')
     processed_state_dict = {}
     for key, value in state_dict.items():
-        if key.startswith("module.backbone."):
+        # Remove '0.' prefix if it exists
+        if key.startswith("0."):
+            new_key = key[2:]  # Remove the '0.' prefix
+        elif key.startswith("module.backbone."):
             new_key = key.replace("module.backbone.", "")
-            processed_state_dict[new_key] = value
         elif key.startswith("backbone."):
             new_key = key.replace("backbone.", "")
-            processed_state_dict[new_key] = value
         else:
-            processed_state_dict[key] = value
+            new_key = key
+        processed_state_dict[new_key] = value
 
     # Load state dict
     model.load_state_dict(processed_state_dict, strict=False)
@@ -547,25 +550,15 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     layers = sorted(layer_stats.keys())
     layer_names = [layer_stats[layer]['name'] for layer in layers]
     
-    # Create shortened names for display (to avoid overcrowding)
-    display_names = []
-    for name in layer_names:
-        if len(name) > 20:
-            # Shorten long names
-            parts = name.split('.')
-            if len(parts) > 2:
-                display_names.append(f"{parts[0]}...{parts[-1]}")
-            else:
-                display_names.append(name[:17] + "...")
-        else:
-            display_names.append(name)
+    # Use full layer names for display and adjust figure size to accommodate longer names
+    display_names = layer_names
     
     # Extract metrics
     l2_distances = [layer_stats[layer]['l2_distance'] for layer in layers]
     cosine_sims = [layer_stats[layer]['cosine_similarity'] for layer in layers]
     
     # Determine figure size based on number of layers
-    fig_width = max(12, len(layers) * 0.5)  # Increase width for more layers
+    fig_width = max(14, len(layers) * 0.7)  # Increase width further for better name visibility
     
     # For line charts, identify parent layers to use as x-tick labels
     parent_layers = set()
@@ -646,7 +639,7 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     plt.close(fig_cos_line)
     
     # 3. L2 Distance Bar Chart - use horizontal bars for better label display
-    fig_l2_bar, ax_l2_bar = plt.subplots(figsize=(10, max(8, len(layers) * 0.3)))
+    fig_l2_bar, ax_l2_bar = plt.subplots(figsize=(12, max(8, len(layers) * 0.5)))
     
     # Reverse the order of layers, names, and values for the bar chart
     reversed_display_names = display_names[::-1]
@@ -668,7 +661,7 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     plt.close(fig_l2_bar)
     
     # 4. Cosine Similarity Bar Chart - use horizontal bars for better label display
-    fig_cos_bar, ax_cos_bar = plt.subplots(figsize=(10, max(8, len(layers) * 0.3)))
+    fig_cos_bar, ax_cos_bar = plt.subplots(figsize=(12, max(8, len(layers) * 0.5)))
     
     # Reverse the order for cosine similarity as well
     reversed_cosine_sims = cosine_sims[::-1]
@@ -692,7 +685,7 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     plt.close(fig_cos_bar)
     
     # 5. Combined plot - also update this to use parent layer names
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(16, fig_width), 6))
     
     # Plot L2 distances
     ax1.plot(layers, l2_distances, 'o-', linewidth=2, markersize=10, color='blue')
@@ -735,119 +728,245 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     plt.close()
 
 
-def compare_model_weights(model1, model2, output_dir, model1_name="Model 1", model2_name="Model 2"):
+def compare_model_weights(model1, model2, output_dir, model1_name="Model 1", model2_name="Model 2", batch_size=1000):
     """
     Compare weights between two models and generate visualizations.
     
     Args:
-        model1 (nn.Module): First model
-        model2 (nn.Module): Second model
+        model1 (nn.Module): First model to compare
+        model2 (nn.Module): Second model to compare
         output_dir (Path): Directory to save visualizations
-        model1_name (str): Name of the first model
-        model2_name (str): Name of the second model
+        model1_name (str): Name of the first model for display
+        model2_name (str): Name of the second model for display
+        batch_size (int): Number of parameters to process at once for memory efficiency
+        
+    Returns:
+        dict: Dictionary containing statistics for each layer including:
+            - l2_distance: L2 distance between weights
+            - cosine_similarity: Cosine similarity between weights
+            - mean_diff: Difference in mean values
+            - std_diff: Difference in standard deviations
+            - max_diff: Maximum absolute difference
+            - min_diff: Minimum absolute difference
+            - median_diff: Median absolute difference
+            - param_count: Number of parameters in the layer
+            
+    Raises:
+        ValueError: If inputs are not valid PyTorch models
+        RuntimeError: If there are issues processing the models
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Create a directory for weight comparisons
-    weights_dir = os.path.join(output_dir, "weight_comparisons")
-    if not os.path.exists(weights_dir):
-        os.makedirs(weights_dir)
-    
-    # Get state dictionaries
-    state_dict1 = model1.state_dict()
-    state_dict2 = model2.state_dict()
-    
-    # Find common parameters
-    common_params = set(state_dict1.keys()).intersection(set(state_dict2.keys()))
-    logger.info(f"Found {len(common_params)} common parameters between models")
-    
-    # Group parameters by layer
-    layer_params = {}
-    for param_name in common_params:
-        # Extract layer name (everything before the last dot)
-        if '.' in param_name:
-            layer_name = '.'.join(param_name.split('.')[:-1])
-        else:
-            layer_name = param_name
+    try:
+        # Input validation
+        if not isinstance(model1, nn.Module) or not isinstance(model2, nn.Module):
+            raise ValueError("Both inputs must be PyTorch models")
+            
+        # Create output directories
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
         
-        if layer_name not in layer_params:
-            layer_params[layer_name] = []
-        layer_params[layer_name].append(param_name)
-    
-    # Collect statistics for each layer
-    layer_stats = {}
-    all_l2_distances = []
-    all_cosine_sims = []
-    all_layer_names = []
-    
-    for layer_name, param_names in layer_params.items():
-        # Skip layers with no parameters
-        if not param_names:
-            continue
+        weights_dir = os.path.join(output_dir, "weight_comparisons")
+        if not os.path.exists(weights_dir):
+            os.makedirs(weights_dir)
         
-        # Collect all parameters for this layer
-        params1 = []
-        params2 = []
+        # Get state dictionaries
+        state_dict1 = model1.state_dict()
+        state_dict2 = model2.state_dict()
         
-        for param_name in param_names:
-            p1 = state_dict1[param_name].cpu().float().flatten()
-            p2 = state_dict2[param_name].cpu().float().flatten()
-            params1.append(p1)
-            params2.append(p2)
+        # Find common parameters
+        common_params = set(state_dict1.keys()).intersection(set(state_dict2.keys()))
+        logger.info(f"Found {len(common_params)} common parameters between models")
         
-        # Concatenate all parameters for this layer
-        all_params1 = torch.cat(params1)
-        all_params2 = torch.cat(params2)
+        # Group parameters by layer
+        layer_params = {}
+        for param_name in common_params:
+            if '.' in param_name:
+                layer_name = '.'.join(param_name.split('.')[:-1])
+            else:
+                layer_name = param_name
+            
+            if layer_name not in layer_params:
+                layer_params[layer_name] = []
+            layer_params[layer_name].append(param_name)
         
-        # Calculate statistics
-        l2_dist = torch.norm(all_params1 - all_params2).item()
+        # Collect statistics for each layer
+        layer_stats = {}
+        all_l2_distances = []
+        all_cosine_sims = []
+        all_layer_names = []
         
-        # Normalize for cosine similarity
-        norm1 = torch.norm(all_params1)
-        norm2 = torch.norm(all_params2)
+        total_layers = len(layer_params)
+        for i, (layer_name, param_names) in enumerate(layer_params.items(), 1):
+            try:
+                logger.info(f"Processing layer {i}/{total_layers}: {layer_name}")
+                
+                # Skip layers with no parameters
+                if not param_names:
+                    continue
+                
+                # Process parameters in batches
+                params1 = []
+                params2 = []
+                
+                # For batch normalization layers, process weight and bias separately
+                if 'bn' in layer_name.lower() or 'batchnorm' in layer_name.lower():
+                    # Process weight and bias separately
+                    weight_params = [p for p in param_names if p.endswith('.weight')]
+                    bias_params = [p for p in param_names if p.endswith('.bias')]
+                    
+                    # Process weights
+                    if weight_params:
+                        weight1 = torch.cat([state_dict1[p].cpu().float().flatten() for p in weight_params])
+                        weight2 = torch.cat([state_dict2[p].cpu().float().flatten() for p in weight_params])
+                        
+                        # Calculate statistics for weights
+                        weight_stats = calculate_layer_statistics(weight1, weight2)
+                        weight_stats['param_type'] = 'weight'
+                        
+                        # Create visualizations for weights
+                        visualize_weight_distributions(
+                            weight1.numpy(),
+                            weight2.numpy(),
+                            f"{layer_name}_weight",
+                            os.path.join(weights_dir, f"{layer_name.replace('.', '_')}_weight"),
+                            model1_name,
+                            model2_name
+                        )
+                    
+                    # Process biases
+                    if bias_params:
+                        bias1 = torch.cat([state_dict1[p].cpu().float().flatten() for p in bias_params])
+                        bias2 = torch.cat([state_dict2[p].cpu().float().flatten() for p in bias_params])
+                        
+                        # Calculate statistics for biases
+                        bias_stats = calculate_layer_statistics(bias1, bias2)
+                        bias_stats['param_type'] = 'bias'
+                        
+                        # Create visualizations for biases
+                        visualize_weight_distributions(
+                            bias1.numpy(),
+                            bias2.numpy(),
+                            f"{layer_name}_bias",
+                            os.path.join(weights_dir, f"{layer_name.replace('.', '_')}_bias"),
+                            model1_name,
+                            model2_name
+                        )
+                    
+                    # Store combined statistics
+                    layer_stats[layer_name] = {
+                        'weight': weight_stats if weight_params else None,
+                        'bias': bias_stats if bias_params else None
+                    }
+                    
+                    # Store for overall comparison (use weight statistics)
+                    if weight_params:
+                        all_l2_distances.append(weight_stats['l2_distance'])
+                        all_cosine_sims.append(weight_stats['cosine_similarity'])
+                        all_layer_names.append(layer_name)
+                    
+                else:
+                    # Process regular layers as before
+                    for j in range(0, len(param_names), batch_size):
+                        batch_params = param_names[j:j + batch_size]
+                        
+                        for param_name in batch_params:
+                            p1 = state_dict1[param_name].cpu().float().flatten()
+                            p2 = state_dict2[param_name].cpu().float().flatten()
+                            params1.append(p1)
+                            params2.append(p2)
+                        
+                        # Clean up batch memory
+                        torch.cuda.empty_cache()
+                    
+                    # Concatenate all parameters for this layer
+                    all_params1 = torch.cat(params1)
+                    all_params2 = torch.cat(params2)
+                    
+                    # Calculate statistics
+                    stats = calculate_layer_statistics(all_params1, all_params2)
+                    layer_stats[layer_name] = stats
+                    
+                    # Store for overall comparison
+                    all_l2_distances.append(stats['l2_distance'])
+                    all_cosine_sims.append(stats['cosine_similarity'])
+                    all_layer_names.append(layer_name)
+                    
+                    # Create visualizations for this layer
+                    visualize_weight_distributions(
+                        all_params1.numpy(), 
+                        all_params2.numpy(), 
+                        layer_name, 
+                        os.path.join(weights_dir, f"{layer_name.replace('.', '_')}"),
+                        model1_name,
+                        model2_name
+                    )
+                
+                # Clean up layer memory
+                del params1, params2
+                if 'all_params1' in locals():
+                    del all_params1, all_params2
+                torch.cuda.empty_cache()
+                
+            except Exception as e:
+                logger.error(f"Error processing layer {layer_name}: {str(e)}")
+                continue
         
-        if norm1 > 0 and norm2 > 0:
-            cosine_sim = torch.dot(all_params1, all_params2) / (norm1 * norm2)
-            cosine_sim = cosine_sim.item()
-        else:
-            cosine_sim = 0.0
-        
-        # Store statistics
-        layer_stats[layer_name] = {
-            'l2_distance': l2_dist,
-            'cosine_similarity': cosine_sim,
-            'mean_diff': (all_params1.mean() - all_params2.mean()).item(),
-            'std_diff': (all_params1.std() - all_params2.std()).item(),
-            'params1': all_params1,
-            'params2': all_params2
-        }
-        
-        # Store for overall comparison
-        all_l2_distances.append(l2_dist)
-        all_cosine_sims.append(cosine_sim)
-        all_layer_names.append(layer_name)
-        
-        # Create visualizations for this layer
-        visualize_weight_distributions(
-            all_params1.numpy(), 
-            all_params2.numpy(), 
-            layer_name, 
-            os.path.join(weights_dir, f"{layer_name.replace('.', '_')}"),
+        # Create overall comparison visualizations
+        visualize_weight_comparison_across_layers(
+            all_layer_names, 
+            all_l2_distances,
+            weights_dir,
             model1_name,
             model2_name
         )
+        
+        return layer_stats
+        
+    except Exception as e:
+        logger.error(f"Error in compare_model_weights: {str(e)}")
+        raise
+    finally:
+        # Ensure cleanup happens even if an error occurs
+        torch.cuda.empty_cache()
+
+def calculate_layer_statistics(params1, params2):
+    """
+    Calculate statistics between two parameter tensors.
     
-    # Create overall comparison visualizations
-    visualize_weight_comparison_across_layers(
-        all_layer_names, 
-        all_l2_distances,
-        weights_dir,
-        model1_name,
-        model2_name
-    )
+    Args:
+        params1 (torch.Tensor): First parameter tensor
+        params2 (torch.Tensor): Second parameter tensor
+        
+    Returns:
+        dict: Dictionary containing various statistics
+    """
+    # Calculate L2 distance
+    l2_dist = torch.norm(params1 - params2).item()
     
-    return layer_stats
+    # Normalize for cosine similarity
+    norm1 = torch.norm(params1)
+    norm2 = torch.norm(params2)
+    
+    if norm1 > 0 and norm2 > 0:
+        cosine_sim = torch.dot(params1, params2) / (norm1 * norm2)
+        cosine_sim = cosine_sim.item()
+    else:
+        cosine_sim = 0.0
+    
+    # Calculate additional statistics
+    abs_diff = torch.abs(params1 - params2)
+    
+    return {
+        'l2_distance': l2_dist,
+        'cosine_similarity': cosine_sim,
+        'mean_diff': (params1.mean() - params2.mean()).item(),
+        'std_diff': (params1.std() - params2.std()).item(),
+        'max_diff': abs_diff.max().item(),
+        'min_diff': abs_diff.min().item(),
+        'median_diff': abs_diff.median().item(),
+        'param_count': len(params1),
+        'params1': params1,
+        'params2': params2
+    }
 
 
 def visualize_weight_distributions(weights1, weights2, layer_name, output_dir, model1_name="Model 1", model2_name="Model 2"):
@@ -979,20 +1098,11 @@ def visualize_weight_comparison_across_layers(layer_names, l2_distances, output_
     sorted_names = [layer_names[i] for i in sorted_indices]
     sorted_l2 = [l2_distances[i] for i in sorted_indices]
     
-    # Create shortened names for display
-    display_names = []
-    for name in sorted_names:
-        if len(name) > 20:
-            parts = name.split('.')
-            if len(parts) > 2:
-                display_names.append(f"{parts[0]}...{parts[-1]}")
-            else:
-                display_names.append(name[:17] + "...")
-        else:
-            display_names.append(name)
+    # Use full layer names for display and adjust figure height
+    display_names = sorted_names
     
     # Create horizontal bar chart for L2 Distance
-    fig_l2, ax_l2 = plt.subplots(figsize=(10, max(8, len(sorted_names) * 0.3)))
+    fig_l2, ax_l2 = plt.subplots(figsize=(12, max(8, len(sorted_names) * 0.5)))
     y_pos = np.arange(len(display_names))
     ax_l2.barh(y_pos, sorted_l2, color='skyblue')
     ax_l2.set_xlabel('L2 Distance')
@@ -1026,6 +1136,14 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
     # Sort layers by their index to maintain proper order
     sorted_layers = sorted(all_stats_by_layer.keys())
     
+    # Filter out parent layers
+    filtered_layers = []
+    for layer_idx in sorted_layers:
+        layer_name = layer_names[layer_idx]
+        # Skip if the layer name is just 'layerX'
+        if not re.match(r'^layer[0-9]+$', layer_name):
+            filtered_layers.append(layer_idx)
+    
     # Extract layer names and metrics
     layer_indices = []
     layer_names_list = []
@@ -1037,8 +1155,7 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
     bn_layer_names = []
     bn_l2_distances = []
     bn_cosine_sims = []
-    
-    for layer_idx in sorted_layers:
+    for layer_idx in filtered_layers:
         if all_stats_by_layer[layer_idx]:  # Check if we have statistics for this layer
             layer_indices.append(layer_idx)
             layer_name = layer_names[layer_idx]
@@ -1064,7 +1181,7 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
     cumulative_l2 = np.cumsum(l2_distances)
     
     # Calculate cumulative changes for batch normalization layers
-    bn_cumulative_l2 = np.cumsum(bn_l2_distances) if bn_l2_distances else []
+    bn_cumulative_l2 = np.cumsum(bn_l2_distances) if bn_l2_distances else np.array([])
     
     # Create figure for cumulative L2 distance (all layers)
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -1342,7 +1459,56 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
                 f.write(f"  L2 Distance: {bn_l2_distances[i]:.4f}\n")
                 f.write(f"  Cosine Similarity: {bn_cosine_sims[i]:.4f}\n")
                 f.write(f"  Cumulative L2: {bn_cumulative_l2[i]:.4f}\n\n")
-    
+
+    # Calculate successive layer ratios for BatchNorm layers
+    if len(bn_l2_distances) > 1:
+        # Calculate ratios between successive layers
+        bn_layer_ratios = np.array(bn_l2_distances[1:]) / np.array(bn_l2_distances[:-1])
+        
+        # Create figure for BatchNorm layer ratios
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Plot ratios
+        ax.plot(bn_layer_indices[1:], bn_layer_ratios, 'o-', linewidth=2, markersize=8, color='purple')
+        ax.set_xlabel('Layer Index')
+        ax.set_ylabel('Ratio of L2 Distances (Layer_n / Layer_{n-1})')
+        ax.set_title(f'Ratio Between Successive BatchNorm Layer Features\n{model1_name} vs {model2_name}')
+        
+        # Add horizontal line at y=1 (indicating no change)
+        ax.axhline(y=1, color='black', linestyle='--', alpha=0.3)
+        
+        ax.grid(True, alpha=0.3)
+        
+        # Add layer names as x-tick labels
+        if len(bn_layer_indices[1:]) > 10:
+            step = len(bn_layer_indices[1:]) // 10
+            tick_indices = bn_layer_indices[1::step]
+            tick_labels = [shortened_bn_names[i] for i in range(1, len(shortened_bn_names), step)]
+            ax.set_xticks(tick_indices)
+            ax.set_xticklabels(tick_labels, rotation=45, ha='right')
+        else:
+            ax.set_xticks(bn_layer_indices[1:])
+            ax.set_xticklabels([shortened_bn_names[i] for i in range(1, len(shortened_bn_names))], rotation=45, ha='right')
+        
+        # Add annotations for ratios
+        for i, ratio in enumerate(bn_layer_ratios):
+            ax.annotate(f'{ratio:.2f}', 
+                       (bn_layer_indices[i+1], ratio),
+                       textcoords="offset points", 
+                       xytext=(0, 10), 
+                       ha='center',
+                       fontsize=8)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'bn_layer_ratios.png'), dpi=150)
+        plt.close()
+        
+        # Include ratios in the statistics file
+        with open(os.path.join(output_dir, "bn_layer_stats.txt"), "a") as f:
+            f.write("\nRatios Between Successive BatchNorm Layers:\n")
+            for i in range(len(bn_layer_ratios)):
+                f.write(f"Ratio {bn_layer_names[i]} to {bn_layer_names[i+1]}: {bn_layer_ratios[i]:.4f}\n")
+
     return {
         'layer_indices': layer_indices,
         'layer_names': layer_names_list,
@@ -1353,8 +1519,27 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
         'bn_layer_names': bn_layer_names,
         'bn_l2_distances': bn_l2_distances,
         'bn_cumulative_l2': bn_cumulative_l2.tolist() if len(bn_cumulative_l2) > 0 else [],
-        'bn_cosine_similarities': bn_cosine_sims
+        'bn_cosine_similarities': bn_cosine_sims,
+        'bn_layer_ratios': bn_layer_ratios.tolist() if len(bn_l2_distances) > 1 else []
     }
+
+
+def filter_target_layers(all_layer_ids, layer_names):
+    """
+    Filter layers to only include top-level layers and all bottleneck outputs in layer1, layer2, layer3.
+    """
+    target_layers = []
+    for layer_id in sorted(all_layer_ids):
+        layer_name = layer_names[layer_id]
+        # Top-level layers
+        if layer_name in ['conv1', 'bn1', 'relu', 'maxpool']:
+            target_layers.append(layer_id)
+            continue
+        # All bottleneck outputs in layer1, layer2, layer3
+        if re.match(r'^layer[123]\.\d+$', layer_name):
+            target_layers.append(layer_id)
+            continue
+    return target_layers
 
 
 def main():
@@ -1412,16 +1597,17 @@ def main():
         # Filter to only include existing layers
         target_layers = [layer for layer in target_layers if layer in all_layer_ids]
     else:
-        # Use all layers
-        target_layers = sorted(list(all_layer_ids))
+        # Use the new filtering function to get only top-level layers and bottleneck outputs
+        target_layers = filter_target_layers(all_layer_ids, extractor1.layer_names)
 
     logger.info(f"Extracting features from {len(target_layers)} layers")
+
 
     # Load dataset
     logger.info(f"Loading dataset: {args.task_ds}")
     dataset = DATASETS[args.task_ds](
         batch_size=args.batch_size,
-        num_workers=4,
+        num_workers=8,
         gpu=torch.cuda.current_device(),
     )
     test_loader = dataset.get_dataloader(split="valid")
