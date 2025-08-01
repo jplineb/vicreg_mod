@@ -8,14 +8,16 @@ import json
 import re
 
 from custom_datasets import DATASETS
-from torchvision.models import resnet50
+from torchvision.models import resnet50, ResNet50_Weights
 from utils.log_config import configure_logging
+
 
 import torch
 import torch.nn as nn
 
 logger = configure_logging()
 
+torch.manual_seed(42)
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -24,7 +26,7 @@ def get_arguments():
     parser.add_argument(
         "--model1-path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the first model's weights",
     )
     parser.add_argument(
@@ -94,6 +96,18 @@ def load_model(model_path):
     Returns:
         nn.Module: Loaded model
     """
+
+    # Create ResNet50 model
+    model = resnet50()
+    if model_path == None:
+        model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+        return model.cuda()
+    print(model_path)
+    if model_path == Path("/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"):
+        state_dict = torch.load(model_path, map_location="cpu")["state_dict"]
+        model = resnet50(weights=state_dict)
+        return model.cuda()
+    
     # Load the model state dict
     state_dict = torch.load(model_path, map_location="cpu")
 
@@ -102,9 +116,6 @@ def load_model(model_path):
         state_dict = state_dict["model"]
     elif isinstance(state_dict, dict) and "state_dict" in state_dict:
         state_dict = state_dict["state_dict"]
-
-    # Create ResNet50 model
-    model = resnet50()
 
     # Replace the final FC layer with Identity for feature extraction
     model.fc = nn.Identity()  # type: ignore
@@ -533,6 +544,97 @@ def calculate_per_sample_cosine_similarity(features1: torch.Tensor, features2: t
     return similarities
 
 
+def calculate_channel_cosine_similarity(feature_map1: torch.Tensor, 
+                                      feature_map2: torch.Tensor) -> dict:
+    """
+    Calculate cosine similarity between two feature maps at each channel.
+    
+    Args:
+        feature_map1: First feature map tensor (B, C, H, W)
+        feature_map2: Second feature map tensor (B, C, H, W)
+    
+    Returns:
+        Dictionary containing cosine similarity statistics per channel
+    """
+    # Ensure both feature maps have the same shape
+    assert feature_map1.shape == feature_map2.shape, f"Feature maps must have same shape: {feature_map1.shape} vs {feature_map2.shape}"
+    
+    B, C, H, W = feature_map1.shape
+    
+    # Reshape to (B, C, H*W) for channel-wise processing
+    fm1_reshaped = feature_map1.view(B, C, -1)  # (B, C, H*W)
+    fm2_reshaped = feature_map2.view(B, C, -1)  # (B, C, H*W)
+    
+    # Channel-wise normalization (L2 norm)
+    fm1_norm = torch.nn.functional.normalize(fm1_reshaped, p=2, dim=2)  # Normalize along spatial dimensions
+    fm2_norm = torch.nn.functional.normalize(fm2_reshaped, p=2, dim=2)  # Normalize along spatial dimensions
+    
+    # Calculate cosine similarity for each channel
+    # cosine_sim = sum(fm1_norm * fm2_norm) / (||fm1_norm|| * ||fm2_norm||)
+    # Since we normalized, this simplifies to dot product
+    cosine_similarities = torch.sum(fm1_norm * fm2_norm, dim=2)  # (B, C)
+    
+    # Calculate statistics across batch dimension
+    mean_cosine_sim = torch.mean(cosine_similarities, dim=0)  # (C,)
+    std_cosine_sim = torch.std(cosine_similarities, dim=0)    # (C,)
+    min_cosine_sim = torch.min(cosine_similarities, dim=0)[0] # (C,)
+    max_cosine_sim = torch.max(cosine_similarities, dim=0)[0] # (C,)
+    
+    # Convert to numpy for easier handling
+    stats = {
+        'channel_cosine_sim_mean': mean_cosine_sim.cpu().numpy(),
+        'channel_cosine_sim_std': std_cosine_sim.cpu().numpy(),
+        'channel_cosine_sim_min': min_cosine_sim.cpu().numpy(),
+        'channel_cosine_sim_max': max_cosine_sim.cpu().numpy(),
+        'channel_cosine_sim_all': cosine_similarities.cpu().numpy(),  # Full (B, C) array
+    }
+    
+    # Add overall statistics
+    stats['overall_cosine_sim_mean'] = float(torch.mean(cosine_similarities))
+    stats['overall_cosine_sim_std'] = float(torch.std(cosine_similarities))
+    stats['overall_cosine_sim_min'] = float(torch.min(cosine_similarities))
+    stats['overall_cosine_sim_max'] = float(torch.max(cosine_similarities))
+    
+    return stats
+
+
+def calculate_channel_cosine_similarity_batch(feature_maps1: list, 
+                                            feature_maps2: list) -> dict:
+    """
+    Calculate cosine similarity statistics across multiple feature maps.
+    
+    Args:
+        feature_maps1: List of feature map tensors from model 1
+        feature_maps2: List of feature map tensors from model 2
+    
+    Returns:
+        Dictionary containing aggregated cosine similarity statistics
+    """
+    all_cosine_sims = []
+    
+    for fm1, fm2 in zip(feature_maps1, feature_maps2):
+        stats = calculate_channel_cosine_similarity(fm1, fm2)
+        all_cosine_sims.append(stats['channel_cosine_sim_all'])
+    
+    # Concatenate all cosine similarities
+    all_cosine_sims = np.concatenate(all_cosine_sims, axis=0)  # (Total_B, C)
+    
+    # Calculate aggregated statistics
+    aggregated_stats = {
+        'channel_cosine_sim_mean': np.mean(all_cosine_sims, axis=0),  # (C,)
+        'channel_cosine_sim_std': np.std(all_cosine_sims, axis=0),    # (C,)
+        'channel_cosine_sim_min': np.min(all_cosine_sims, axis=0),    # (C,)
+        'channel_cosine_sim_max': np.max(all_cosine_sims, axis=0),    # (C,)
+        'all_cosine_sims': all_cosine_sims,  # Save the full array
+        'overall_cosine_sim_mean': float(np.mean(all_cosine_sims)),
+        'overall_cosine_sim_std': float(np.std(all_cosine_sims)),
+        'overall_cosine_sim_min': float(np.min(all_cosine_sims)),
+        'overall_cosine_sim_max': float(np.max(all_cosine_sims)),
+    }
+    
+    return aggregated_stats
+
+
 def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name):
     """
     Visualize comparison metrics across different layers.
@@ -557,41 +659,44 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     l2_distances = [layer_stats[layer]['l2_distance'] for layer in layers]
     cosine_sims = [layer_stats[layer]['cosine_similarity'] for layer in layers]
     
-    # Determine figure size based on number of layers
-    fig_width = max(14, len(layers) * 0.7)  # Increase width further for better name visibility
+    # Determine figure size based on number of layers - increase width significantly
+    fig_width = max(20, len(layers) * 1.2)  # Much wider for better spacing
     
-    # For line charts, identify parent layers to use as x-tick labels
-    parent_layers = set()
-    parent_layer_indices = []
-    parent_layer_names = []
-    
-    for i, name in enumerate(layer_names):
-        # Get the top-level parent (e.g., 'conv1', 'layer1', etc.)
-        parent = name.split('.')[0]
-        if parent not in parent_layers:
-            parent_layers.add(parent)
-            parent_layer_indices.append(layers[i])
-            parent_layer_names.append(parent)
+    # For line charts, create better x-tick spacing
+    # Show every layer but with better spacing and rotation
+    if len(layers) <= 15:
+        # For fewer layers, show all layer names
+        tick_indices = layers
+        tick_labels = layer_names
+    else:
+        # For many layers, show every nth layer to avoid overcrowding
+        step = max(1, len(layers) // 15)  # Show max 15 labels
+        tick_indices = layers[::step]
+        tick_labels = [layer_names[i] for i in range(0, len(layer_names), step)]
+        # Always include the first and last layer
+        if layers[0] not in tick_indices:
+            tick_indices.insert(0, layers[0])
+            tick_labels.insert(0, layer_names[0])
+        if layers[-1] not in tick_indices:
+            tick_indices.append(layers[-1])
+            tick_labels.append(layer_names[-1])
     
     # 1. L2 Distance Line Plot
     fig_l2_line, ax_l2_line = plt.subplots(figsize=(fig_width, 6))
-    ax_l2_line.plot(layers, l2_distances, 'o-', linewidth=2, markersize=10, color='blue')
+    ax_l2_line.plot(layers, l2_distances, 'o-', linewidth=2, markersize=8, color='blue')
     ax_l2_line.set_xlabel('Layer')
     ax_l2_line.set_ylabel('L2 Distance')
     ax_l2_line.set_title(f'L2 Distance Between {model1_name} and {model2_name} by Layer')
     
-    # Set x-ticks at parent layer positions
-    ax_l2_line.set_xticks(parent_layer_indices)
-    ax_l2_line.set_xticklabels(parent_layer_names, rotation=45, ha='right')
+    # Set x-ticks with better spacing
+    ax_l2_line.set_xticks(tick_indices)
+    ax_l2_line.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=10)
     
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax_l2_line.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
-    
+    # Add grid for better readability
     ax_l2_line.grid(True, alpha=0.3)
     
     # Add value labels (only for a reasonable number of points)
-    if len(layers) <= 30:
+    if len(layers) <= 20:
         for i, l2 in enumerate(l2_distances):
             ax_l2_line.annotate(f'{l2:.2f}', 
                         (layers[i], l2),
@@ -601,28 +706,25 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
                         fontsize=8)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'l2_distance_line.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'l2_distance_line.png'), dpi=150, bbox_inches='tight')
     plt.close(fig_l2_line)
     
     # 2. Cosine Similarity Line Plot
     fig_cos_line, ax_cos_line = plt.subplots(figsize=(fig_width, 6))
-    ax_cos_line.plot(layers, cosine_sims, 'o-', linewidth=2, markersize=10, color='green')
+    ax_cos_line.plot(layers, cosine_sims, 'o-', linewidth=2, markersize=8, color='green')
     ax_cos_line.set_xlabel('Layer')
     ax_cos_line.set_ylabel('Cosine Similarity')
     ax_cos_line.set_title(f'Cosine Similarity Between {model1_name} and {model2_name} by Layer')
     
-    # Set x-ticks at parent layer positions
-    ax_cos_line.set_xticks(parent_layer_indices)
-    ax_cos_line.set_xticklabels(parent_layer_names, rotation=45, ha='right')
+    # Set x-ticks with better spacing
+    ax_cos_line.set_xticks(tick_indices)
+    ax_cos_line.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=10)
     
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax_cos_line.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
-    
+    # Add grid for better readability
     ax_cos_line.grid(True, alpha=0.3)
     
     # Add value labels (only for a reasonable number of points)
-    if len(layers) <= 30:
+    if len(layers) <= 20:
         for i, sim in enumerate(cosine_sims):
             ax_cos_line.annotate(f'{sim:.2f}', 
                         (layers[i], sim),
@@ -635,11 +737,11 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     ax_cos_line.set_ylim(-1.05, 1.05)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cosine_similarity_line.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'cosine_similarity_line.png'), dpi=150, bbox_inches='tight')
     plt.close(fig_cos_line)
     
     # 3. L2 Distance Bar Chart - use horizontal bars for better label display
-    fig_l2_bar, ax_l2_bar = plt.subplots(figsize=(12, max(8, len(layers) * 0.5)))
+    fig_l2_bar, ax_l2_bar = plt.subplots(figsize=(12, max(10, len(layers) * 0.4)))
     
     # Reverse the order of layers, names, and values for the bar chart
     reversed_display_names = display_names[::-1]
@@ -650,18 +752,18 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     ax_l2_bar.set_xlabel('L2 Distance')
     ax_l2_bar.set_title(f'L2 Distance Between {model1_name} and {model2_name} by Layer')
     ax_l2_bar.set_yticks(y_pos)
-    ax_l2_bar.set_yticklabels(reversed_display_names)
+    ax_l2_bar.set_yticklabels(reversed_display_names, fontsize=10)
     
     # Add value labels
     for i, l2 in enumerate(reversed_l2_distances):
-        ax_l2_bar.text(l2 + max(reversed_l2_distances)*0.02, i, f'{l2:.2f}', va='center')
+        ax_l2_bar.text(l2 + max(reversed_l2_distances)*0.02, i, f'{l2:.2f}', va='center', fontsize=9)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'l2_distance_bar.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'l2_distance_bar.png'), dpi=150, bbox_inches='tight')
     plt.close(fig_l2_bar)
     
     # 4. Cosine Similarity Bar Chart - use horizontal bars for better label display
-    fig_cos_bar, ax_cos_bar = plt.subplots(figsize=(12, max(8, len(layers) * 0.5)))
+    fig_cos_bar, ax_cos_bar = plt.subplots(figsize=(12, max(10, len(layers) * 0.4)))
     
     # Reverse the order for cosine similarity as well
     reversed_cosine_sims = cosine_sims[::-1]
@@ -670,52 +772,44 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     ax_cos_bar.set_xlabel('Cosine Similarity')
     ax_cos_bar.set_title(f'Cosine Similarity Between {model1_name} and {model2_name} by Layer')
     ax_cos_bar.set_yticks(y_pos)
-    ax_cos_bar.set_yticklabels(reversed_display_names)
+    ax_cos_bar.set_yticklabels(reversed_display_names, fontsize=10)
     
     # Add value labels
     for i, sim in enumerate(reversed_cosine_sims):
         label_pos = sim + 0.05 if sim > 0 else sim - 0.1
-        ax_cos_bar.text(label_pos, i, f'{sim:.2f}', va='center')
+        ax_cos_bar.text(label_pos, i, f'{sim:.2f}', va='center', fontsize=9)
     
     # Set x-axis limits for cosine similarity
     ax_cos_bar.set_xlim(-1.05, 1.05)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cosine_similarity_bar.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'cosine_similarity_bar.png'), dpi=150, bbox_inches='tight')
     plt.close(fig_cos_bar)
     
-    # 5. Combined plot - also update this to use parent layer names
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(16, fig_width), 6))
+    # 5. Combined plot with better spacing
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(20, fig_width), 6))
     
     # Plot L2 distances
-    ax1.plot(layers, l2_distances, 'o-', linewidth=2, markersize=10, color='blue')
+    ax1.plot(layers, l2_distances, 'o-', linewidth=2, markersize=8, color='blue')
     ax1.set_xlabel('Layer')
     ax1.set_ylabel('L2 Distance')
     ax1.set_title(f'L2 Distance Between {model1_name} and {model2_name}')
     
-    # Set x-ticks at parent layer positions
-    ax1.set_xticks(parent_layer_indices)
-    ax1.set_xticklabels(parent_layer_names, rotation=45, ha='right')
-    
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax1.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
+    # Set x-ticks with better spacing
+    ax1.set_xticks(tick_indices)
+    ax1.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=9)
     
     ax1.grid(True, alpha=0.3)
     
     # Plot Cosine similarities
-    ax2.plot(layers, cosine_sims, 'o-', linewidth=2, markersize=10, color='green')
+    ax2.plot(layers, cosine_sims, 'o-', linewidth=2, markersize=8, color='green')
     ax2.set_xlabel('Layer')
     ax2.set_ylabel('Cosine Similarity')
     ax2.set_title(f'Cosine Similarity Between {model1_name} and {model2_name}')
     
-    # Set x-ticks at parent layer positions
-    ax2.set_xticks(parent_layer_indices)
-    ax2.set_xticklabels(parent_layer_names, rotation=45, ha='right')
-    
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax2.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
+    # Set x-ticks with better spacing
+    ax2.set_xticks(tick_indices)
+    ax2.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=9)
     
     ax2.grid(True, alpha=0.3)
     
@@ -724,7 +818,7 @@ def visualize_layer_comparison(layer_stats, output_dir, model1_name, model2_name
     
     plt.suptitle(f'Layer-wise Comparison Between {model1_name} and {model2_name}', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
-    plt.savefig(os.path.join(output_dir, 'layer_comparison.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'layer_comparison.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -1150,11 +1244,6 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
     l2_distances = []
     cosine_sims = []
     
-    # Filter for batch normalization layers
-    bn_layer_indices = []
-    bn_layer_names = []
-    bn_l2_distances = []
-    bn_cosine_sims = []
     for layer_idx in filtered_layers:
         if all_stats_by_layer[layer_idx]:  # Check if we have statistics for this layer
             layer_indices.append(layer_idx)
@@ -1169,49 +1258,40 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
             
             l2_distances.append(avg_stats['l2_distance'])
             cosine_sims.append(avg_stats['cosine_similarity'])
-            
-            # Check if this is a batch normalization layer
-            if 'bn' in layer_name or 'BatchNorm' in layer_name:
-                bn_layer_indices.append(layer_idx)
-                bn_layer_names.append(layer_name)
-                bn_l2_distances.append(avg_stats['l2_distance'])
-                bn_cosine_sims.append(avg_stats['cosine_similarity'])
     
     # Calculate cumulative changes for all layers
     cumulative_l2 = np.cumsum(l2_distances)
     
-    # Calculate cumulative changes for batch normalization layers
-    bn_cumulative_l2 = np.cumsum(bn_l2_distances) if bn_l2_distances else np.array([])
-    
     # Create figure for cumulative L2 distance (all layers)
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(max(20, len(layer_indices) * 1.2), 6))
     
     # Plot cumulative L2 distance
-    ax.plot(layer_indices, cumulative_l2, 'o-', linewidth=2, markersize=10, color='purple')
+    ax.plot(layer_indices, cumulative_l2, 'o-', linewidth=2, markersize=8, color='purple')
     ax.set_xlabel('Layer Index')
     ax.set_ylabel('Cumulative L2 Distance')
     ax.set_title(f'Cumulative Feature Differences Between {model1_name} and {model2_name}')
     
-    # Identify parent layers for x-tick labels
-    parent_layers = set()
-    parent_layer_indices = []
-    parent_layer_names = []
+    # Create better x-tick spacing
+    if len(layer_indices) <= 15:
+        # For fewer layers, show all layer names
+        tick_indices = layer_indices
+        tick_labels = layer_names_list
+    else:
+        # For many layers, show every nth layer to avoid overcrowding
+        step = max(1, len(layer_indices) // 15)  # Show max 15 labels
+        tick_indices = layer_indices[::step]
+        tick_labels = [layer_names_list[i] for i in range(0, len(layer_names_list), step)]
+        # Always include the first and last layer
+        if layer_indices[0] not in tick_indices:
+            tick_indices.insert(0, layer_indices[0])
+            tick_labels.insert(0, layer_names_list[0])
+        if layer_indices[-1] not in tick_indices:
+            tick_indices.append(layer_indices[-1])
+            tick_labels.append(layer_names_list[-1])
     
-    for i, name in enumerate(layer_names_list):
-        # Get the top-level parent (e.g., 'conv1', 'layer1', etc.)
-        parent = name.split('.')[0]
-        if parent not in parent_layers:
-            parent_layers.add(parent)
-            parent_layer_indices.append(layer_indices[i])
-            parent_layer_names.append(parent)
-    
-    # Set x-ticks at parent layer positions
-    ax.set_xticks(parent_layer_indices)
-    ax.set_xticklabels(parent_layer_names, rotation=45, ha='right')
-    
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
+    # Set x-ticks with better spacing
+    ax.set_xticks(tick_indices)
+    ax.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=10)
     
     ax.grid(True, alpha=0.3)
     
@@ -1226,24 +1306,20 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
                         fontsize=8)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cumulative_l2_distance.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'cumulative_l2_distance.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
     # Create a figure showing both L2 distance and cumulative L2
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(20, len(layer_indices) * 1.2), 10), sharex=True)
     
     # Plot L2 distance per layer
     ax1.plot(layer_indices, l2_distances, 'o-', linewidth=2, markersize=8, color='blue')
     ax1.set_ylabel('L2 Distance')
     ax1.set_title(f'L2 Distance Between {model1_name} and {model2_name} Features by Layer')
     
-    # Set x-ticks at parent layer positions
-    ax1.set_xticks(parent_layer_indices)
-    ax1.set_xticklabels(parent_layer_names, rotation=45, ha='right')
-    
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax1.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
+    # Set x-ticks with better spacing
+    ax1.set_xticks(tick_indices)
+    ax1.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=10)
     
     ax1.grid(True, alpha=0.3)
     
@@ -1253,15 +1329,11 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
     ax2.set_ylabel('Cumulative L2 Distance')
     ax2.set_title(f'Cumulative Feature Differences')
     
-    # Add vertical lines to separate parent layers
-    for idx in parent_layer_indices[1:]:  # Skip the first one
-        ax2.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
-    
     ax2.grid(True, alpha=0.3)
     
     plt.suptitle(f'Feature Differences Between {model1_name} and {model2_name} Across Layers', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
-    plt.savefig(os.path.join(output_dir, 'l2_and_cumulative.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'l2_and_cumulative.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
     # Calculate rate of change (derivative of L2 distance)
@@ -1269,7 +1341,7 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
         rate_of_change = np.diff(l2_distances)
         
         # Create figure for rate of change
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(max(20, len(layer_indices[1:]) * 1.2), 6))
         
         # Plot rate of change
         ax.plot(layer_indices[1:], rate_of_change, 'o-', linewidth=2, markersize=8, color='red')
@@ -1277,16 +1349,23 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
         ax.set_ylabel('Rate of Change in L2 Distance')
         ax.set_title(f'Rate of Feature Divergence Between {model1_name} and {model2_name}')
         
-        # Set x-ticks at parent layer positions that are in the range
-        valid_parent_indices = [idx for idx in parent_layer_indices if idx in layer_indices[1:]]
-        valid_parent_names = [parent_layer_names[parent_layer_indices.index(idx)] for idx in valid_parent_indices]
+        # Create better x-tick spacing for rate of change
+        if len(layer_indices[1:]) <= 15:
+            tick_indices_roc = layer_indices[1:]
+            tick_labels_roc = [layer_names_list[i] for i in range(1, len(layer_names_list))]
+        else:
+            step = max(1, len(layer_indices[1:]) // 15)
+            tick_indices_roc = layer_indices[1::step]
+            tick_labels_roc = [layer_names_list[i] for i in range(1, len(layer_names_list), step)]
+            if layer_indices[1] not in tick_indices_roc:
+                tick_indices_roc.insert(0, layer_indices[1])
+                tick_labels_roc.insert(0, layer_names_list[1])
+            if layer_indices[-1] not in tick_indices_roc:
+                tick_indices_roc.append(layer_indices[-1])
+                tick_labels_roc.append(layer_names_list[-1])
         
-        ax.set_xticks(valid_parent_indices)
-        ax.set_xticklabels(valid_parent_names, rotation=45, ha='right')
-        
-        # Add vertical lines to separate parent layers
-        for idx in valid_parent_indices[1:]:  # Skip the first one
-            ax.axvline(x=idx, color='gray', linestyle='--', alpha=0.3)
+        ax.set_xticks(tick_indices_roc)
+        ax.set_xticklabels(tick_labels_roc, rotation=45, ha='right', fontsize=10)
         
         # Add horizontal line at y=0
         ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
@@ -1294,220 +1373,64 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'rate_of_change.png'), dpi=150)
+        plt.savefig(os.path.join(output_dir, 'rate_of_change.png'), dpi=150, bbox_inches='tight')
         plt.close()
     
-    # Create BatchNorm-specific visualizations if we have batch norm layers
-    if bn_layer_indices:
-        # Create figure for cumulative L2 distance (BatchNorm layers only)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        
-        # Plot cumulative L2 distance for BatchNorm layers
-        ax.plot(bn_layer_indices, bn_cumulative_l2, 'o-', linewidth=2, markersize=10, color='green')
-        ax.set_xlabel('Layer Index')
-        ax.set_ylabel('Cumulative L2 Distance')
-        ax.set_title(f'Cumulative BatchNorm Feature Differences Between {model1_name} and {model2_name}')
-        
-        # Add grid
-        ax.grid(True, alpha=0.3)
-        
-        # Add annotations for key points
-        for i, (idx, l2) in enumerate(zip(bn_layer_indices, bn_cumulative_l2)):
-            if i % max(1, len(bn_layer_indices) // 5) == 0 or i == len(bn_layer_indices) - 1:  # Annotate every 5th point and the last point
-                ax.annotate(f'{l2:.2f}', 
-                            (idx, l2),
-                            textcoords="offset points", 
-                            xytext=(0, 10), 
-                            ha='center',
-                            fontsize=8)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'bn_cumulative_l2_distance.png'), dpi=150)
-        plt.close()
-        
-        # Create shortened names for display
-        shortened_bn_names = []
-        for name in bn_layer_names:
-            if len(name) > 20:
-                parts = name.split('.')
-                if len(parts) > 2:
-                    shortened_bn_names.append(f"{parts[0]}...{parts[-1]}")
-                else:
-                    shortened_bn_names.append(name[:17] + "...")
-            else:
-                shortened_bn_names.append(name)
-        
-        # Calculate rate of change for BatchNorm layers
-        if len(bn_l2_distances) > 1:
-            bn_rate_of_change = np.diff(bn_l2_distances)
-            
-            # Create figure for BatchNorm rate of change
-            fig, ax = plt.subplots(figsize=(12, 6))
-            
-            # Plot rate of change for BatchNorm layers
-            ax.plot(bn_layer_indices[1:], bn_rate_of_change, 'o-', linewidth=2, markersize=8, color='red')
-            ax.set_xlabel('Layer Index')
-            ax.set_ylabel('Rate of Change in L2 Distance')
-            ax.set_title(f'Rate of BatchNorm Feature Divergence Between {model1_name} and {model2_name}')
-            
-            # Add horizontal line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-            
-            ax.grid(True, alpha=0.3)
-            
-            # Add layer names as x-tick labels (shortened for readability)
-            if len(bn_layer_indices) > 1:
-                shortened_bn_names_diff = [shortened_bn_names[i] for i in range(1, len(shortened_bn_names))]
-                
-                # Only show a subset of tick labels if there are many BatchNorm layers
-                if len(bn_layer_indices[1:]) > 10:
-                    step = len(bn_layer_indices[1:]) // 10
-                    tick_indices = bn_layer_indices[1::step]
-                    tick_labels = [shortened_bn_names_diff[i] for i in range(0, len(shortened_bn_names_diff), step)]
-                    ax.set_xticks(tick_indices)
-                    ax.set_xticklabels(tick_labels, rotation=45, ha='right')
-                else:
-                    ax.set_xticks(bn_layer_indices[1:])
-                    ax.set_xticklabels(shortened_bn_names_diff, rotation=45, ha='right')
-            
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'bn_rate_of_change.png'), dpi=150)
-            plt.close()
-            
-            # Create a combined figure with L2, cumulative L2, and rate of change for BatchNorm layers
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
-            
-            # Plot L2 distance per BatchNorm layer
-            ax1.plot(bn_layer_indices, bn_l2_distances, 'o-', linewidth=2, markersize=8, color='blue')
-            ax1.set_ylabel('L2 Distance')
-            ax1.set_title(f'L2 Distance Between {model1_name} and {model2_name} BatchNorm Features')
-            ax1.grid(True, alpha=0.3)
-            
-            # Plot cumulative L2 distance for BatchNorm layers
-            ax2.plot(bn_layer_indices, bn_cumulative_l2, 'o-', linewidth=2, markersize=8, color='green')
-            ax2.set_ylabel('Cumulative L2 Distance')
-            ax2.set_title(f'Cumulative BatchNorm Feature Differences')
-            ax2.grid(True, alpha=0.3)
-            
-            # Plot rate of change for BatchNorm layers
-            ax3.plot(bn_layer_indices[1:], bn_rate_of_change, 'o-', linewidth=2, markersize=8, color='red')
-            ax3.set_xlabel('Layer Index')
-            ax3.set_ylabel('Rate of Change')
-            ax3.set_title(f'Rate of BatchNorm Feature Divergence')
-            ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-            ax3.grid(True, alpha=0.3)
-            
-            # Add layer names as x-tick labels (shortened for readability)
-            if len(bn_layer_indices) > 10:
-                step = len(bn_layer_indices) // 10
-                tick_indices = bn_layer_indices[::step]
-                tick_labels = [shortened_bn_names[i] for i in range(0, len(shortened_bn_names), step)]
-                ax1.set_xticks(tick_indices)
-                ax1.set_xticklabels(tick_labels, rotation=45, ha='right')
-            else:
-                ax1.set_xticks(bn_layer_indices)
-                ax1.set_xticklabels(shortened_bn_names, rotation=45, ha='right')
-            
-            plt.suptitle(f'BatchNorm Feature Analysis Between {model1_name} and {model2_name}', fontsize=16)
-            plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
-            plt.savefig(os.path.join(output_dir, 'bn_comprehensive_analysis.png'), dpi=150)
-            plt.close()
-            
-            # Include rate of change in the statistics file
-            with open(os.path.join(output_dir, "bn_layer_stats.txt"), "a") as f:
-                f.write("\nRate of Change Between BatchNorm Layers:\n")
-                for i in range(len(bn_rate_of_change)):
-                    f.write(f"Between layers {bn_layer_indices[i]} and {bn_layer_indices[i+1]}: {bn_rate_of_change[i]:.4f}\n")
-        
-        # Create a figure showing both L2 distance and cumulative L2 for BatchNorm layers
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        
-        # Plot L2 distance per BatchNorm layer
-        ax1.plot(bn_layer_indices, bn_l2_distances, 'o-', linewidth=2, markersize=8, color='blue')
-        ax1.set_ylabel('L2 Distance')
-        ax1.set_title(f'L2 Distance Between {model1_name} and {model2_name} BatchNorm Features')
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot cumulative L2 distance for BatchNorm layers
-        ax2.plot(bn_layer_indices, bn_cumulative_l2, 'o-', linewidth=2, markersize=8, color='green')
-        ax2.set_xlabel('Layer Index')
-        ax2.set_ylabel('Cumulative L2 Distance')
-        ax2.set_title(f'Cumulative BatchNorm Feature Differences')
-        ax2.grid(True, alpha=0.3)
-        
-        # Add layer names as x-tick labels
-        if len(bn_layer_indices) > 10:
-            step = len(bn_layer_indices) // 10
-            tick_indices = bn_layer_indices[::step]
-            tick_labels = [shortened_bn_names[i] for i in range(0, len(shortened_bn_names), step)]
-            ax2.set_xticks(tick_indices)
-            ax2.set_xticklabels(tick_labels, rotation=45, ha='right')
-        else:
-            ax2.set_xticks(bn_layer_indices)
-            ax2.set_xticklabels(shortened_bn_names, rotation=45, ha='right')
-        
-        plt.suptitle(f'BatchNorm Feature Analysis Between {model1_name} and {model2_name}', fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore
-        plt.savefig(os.path.join(output_dir, 'bn_l2_and_cumulative.png'), dpi=150)
-        plt.close()
-        
-        # Save BatchNorm-specific statistics to file
-        with open(os.path.join(output_dir, "bn_layer_stats.txt"), "w") as f:
-            f.write(f"BatchNorm Layer Statistics Between {model1_name} and {model2_name}\n\n")
-            for i, idx in enumerate(bn_layer_indices):
-                f.write(f"Layer {idx} ({bn_layer_names[i]}):\n")
-                f.write(f"  L2 Distance: {bn_l2_distances[i]:.4f}\n")
-                f.write(f"  Cosine Similarity: {bn_cosine_sims[i]:.4f}\n")
-                f.write(f"  Cumulative L2: {bn_cumulative_l2[i]:.4f}\n\n")
-
-    # Calculate successive layer ratios for BatchNorm layers
-    if len(bn_l2_distances) > 1:
+    # Calculate successive layer ratios
+    if len(l2_distances) > 1:
         # Calculate ratios between successive layers
-        bn_layer_ratios = np.array(bn_l2_distances[1:]) / np.array(bn_l2_distances[:-1])
+        layer_ratios = np.array(l2_distances[1:]) / np.array(l2_distances[:-1])
         
-        # Create figure for BatchNorm layer ratios
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Create figure for layer ratios
+        fig, ax = plt.subplots(figsize=(max(20, len(layer_indices[1:]) * 1.2), 6))
         
         # Plot ratios
-        ax.plot(bn_layer_indices[1:], bn_layer_ratios, 'o-', linewidth=2, markersize=8, color='purple')
+        ax.plot(layer_indices[1:], layer_ratios, 'o-', linewidth=2, markersize=8, color='purple')
         ax.set_xlabel('Layer Index')
         ax.set_ylabel('Ratio of L2 Distances (Layer_n / Layer_{n-1})')
-        ax.set_title(f'Ratio Between Successive BatchNorm Layer Features\n{model1_name} vs {model2_name}')
+        ax.set_title(f'Ratio Between Successive Layer Features\n{model1_name} vs {model2_name}')
         
         # Add horizontal line at y=1 (indicating no change)
         ax.axhline(y=1, color='black', linestyle='--', alpha=0.3)
         
         ax.grid(True, alpha=0.3)
         
-        # Add layer names as x-tick labels
-        if len(bn_layer_indices[1:]) > 10:
-            step = len(bn_layer_indices[1:]) // 10
-            tick_indices = bn_layer_indices[1::step]
-            tick_labels = [shortened_bn_names[i] for i in range(1, len(shortened_bn_names), step)]
-            ax.set_xticks(tick_indices)
-            ax.set_xticklabels(tick_labels, rotation=45, ha='right')
+        # Create better x-tick spacing for layer ratios
+        if len(layer_indices[1:]) <= 15:
+            tick_indices_ratio = layer_indices[1:]
+            tick_labels_ratio = [layer_names_list[i] for i in range(1, len(layer_names_list))]
         else:
-            ax.set_xticks(bn_layer_indices[1:])
-            ax.set_xticklabels([shortened_bn_names[i] for i in range(1, len(shortened_bn_names))], rotation=45, ha='right')
+            step = max(1, len(layer_indices[1:]) // 15)
+            tick_indices_ratio = layer_indices[1::step]
+            tick_labels_ratio = [layer_names_list[i] for i in range(1, len(layer_names_list), step)]
+            if layer_indices[1] not in tick_indices_ratio:
+                tick_indices_ratio.insert(0, layer_indices[1])
+                tick_labels_ratio.insert(0, layer_names_list[1])
+            if layer_indices[-1] not in tick_indices_ratio:
+                tick_indices_ratio.append(layer_indices[-1])
+                tick_labels_ratio.append(layer_names_list[-1])
+        
+        ax.set_xticks(tick_indices_ratio)
+        ax.set_xticklabels(tick_labels_ratio, rotation=45, ha='right', fontsize=10)
         
         # Add annotations for ratios
-        for i, ratio in enumerate(bn_layer_ratios):
+        for i, ratio in enumerate(layer_ratios):
             ax.annotate(f'{ratio:.2f}', 
-                       (bn_layer_indices[i+1], ratio),
+                       (layer_indices[i+1], ratio),
                        textcoords="offset points", 
                        xytext=(0, 10), 
                        ha='center',
                        fontsize=8)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'bn_layer_ratios.png'), dpi=150)
+        plt.savefig(os.path.join(output_dir, 'layer_ratios.png'), dpi=150, bbox_inches='tight')
         plt.close()
         
         # Include ratios in the statistics file
-        with open(os.path.join(output_dir, "bn_layer_stats.txt"), "a") as f:
-            f.write("\nRatios Between Successive BatchNorm Layers:\n")
-            for i in range(len(bn_layer_ratios)):
-                f.write(f"Ratio {bn_layer_names[i]} to {bn_layer_names[i+1]}: {bn_layer_ratios[i]:.4f}\n")
+        with open(os.path.join(output_dir, "layer_stats.txt"), "a") as f:
+            f.write("\nRatios Between Successive Layers:\n")
+            for i in range(len(layer_ratios)):
+                f.write(f"Ratio {layer_names_list[i]} to {layer_names_list[i+1]}: {layer_ratios[i]:.4f}\n")
 
     return {
         'layer_indices': layer_indices,
@@ -1515,12 +1438,7 @@ def calculate_cumulative_feature_changes(all_stats_by_layer, layer_names, model1
         'l2_distances': l2_distances,
         'cumulative_l2': cumulative_l2.tolist(),
         'cosine_similarities': cosine_sims,
-        'bn_layer_indices': bn_layer_indices,
-        'bn_layer_names': bn_layer_names,
-        'bn_l2_distances': bn_l2_distances,
-        'bn_cumulative_l2': bn_cumulative_l2.tolist() if len(bn_cumulative_l2) > 0 else [],
-        'bn_cosine_similarities': bn_cosine_sims,
-        'bn_layer_ratios': bn_layer_ratios.tolist() if len(bn_l2_distances) > 1 else []
+        'layer_ratios': layer_ratios.tolist() if len(l2_distances) > 1 else []
     }
 
 
@@ -1541,6 +1459,349 @@ def filter_target_layers(all_layer_ids, layer_names):
             continue
     return target_layers
 
+
+def visualize_channel_cosine_similarity_distributions(channel_cosine_sims_by_layer, extractor_layer_names, output_dir, model1_name="Model 1", model2_name="Model 2"):
+    """
+    Visualize distributions of channel-wise cosine similarities across layers.
+    
+    Args:
+        channel_cosine_sims_by_layer (dict): Dictionary with layer indices as keys and cosine similarity stats as values
+        extractor_layer_names (dict): Dictionary mapping layer indices to layer names
+        output_dir (Path): Directory to save visualizations
+        model1_name (str): Name of the first model
+        model2_name (str): Name of the second model
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Create a 2x2 visualization (removing heatmap)
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+    
+    # Collect data across all layers
+    all_layer_names = []
+    all_mean_sims = []
+    all_std_sims = []
+    all_min_sims = []
+    all_max_sims = []
+    
+    for layer_idx in sorted(channel_cosine_sims_by_layer.keys()):
+        if channel_cosine_sims_by_layer[layer_idx]:
+            # Calculate average statistics across batches for this layer
+            layer_stats = channel_cosine_sims_by_layer[layer_idx]
+            avg_mean = np.mean([stat['channel_cosine_sim_mean'] for stat in layer_stats], axis=0)
+            avg_std = np.mean([stat['channel_cosine_sim_std'] for stat in layer_stats], axis=0)
+            avg_min = np.mean([stat['channel_cosine_sim_min'] for stat in layer_stats], axis=0)
+            avg_max = np.mean([stat['channel_cosine_sim_max'] for stat in layer_stats], axis=0)
+            
+            # Use actual layer name instead of just index
+            layer_name = extractor_layer_names.get(layer_idx, f"Layer_{layer_idx}")
+            all_layer_names.append(layer_name)
+            all_mean_sims.append(avg_mean)
+            all_std_sims.append(avg_std)
+            all_min_sims.append(avg_min)
+            all_max_sims.append(avg_max)
+    
+    # Create better x-tick spacing for readability
+    if len(all_layer_names) <= 10:
+        tick_labels = all_layer_names
+        tick_positions = range(len(all_layer_names))
+        box_labels = all_layer_names
+    else:
+        # For many layers, show every nth layer to avoid overcrowding
+        step = max(1, len(all_layer_names) // 10)
+        tick_positions = list(range(0, len(all_layer_names), step))
+        tick_labels = [all_layer_names[i] for i in tick_positions]
+        # Always include the last layer
+        if len(all_layer_names) - 1 not in tick_positions:
+            tick_positions.append(len(all_layer_names) - 1)
+            tick_labels.append(all_layer_names[-1])
+        
+        # For box plot, use shortened labels
+        box_labels = [f"L{i}" for i in range(len(all_layer_names))]
+    
+    # 1. Box plot of channel cosine similarities across layers (use actual layer names)
+    ax1.boxplot(all_mean_sims, labels=all_layer_names)
+    ax1.set_title(f'Channel-wise Cosine Similarity Distribution Across Layers\n{model1_name} vs {model2_name}')
+    ax1.set_xlabel('Layer')
+    ax1.set_ylabel('Cosine Similarity')
+    ax1.tick_params(axis='x', rotation=45)
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Mean cosine similarity per layer
+    layer_means = [np.mean(means) for means in all_mean_sims]
+    layer_stds = [np.std(means) for means in all_mean_sims]
+    
+    ax2.errorbar(range(len(all_layer_names)), layer_means, yerr=layer_stds, 
+                marker='o', capsize=5, capthick=2, linewidth=2, markersize=8)
+    ax2.set_title(f'Average Channel Cosine Similarity per Layer\n{model1_name} vs {model2_name}')
+    ax2.set_xlabel('Layer')
+    ax2.set_ylabel('Average Cosine Similarity')
+    ax2.set_xticks(tick_positions)
+    ax2.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Min/Max range across layers (replacing heatmap)
+    layer_mins = [np.min(mins) for mins in all_min_sims]
+    layer_maxs = [np.max(maxs) for maxs in all_max_sims]
+    
+    ax3.fill_between(range(len(all_layer_names)), layer_mins, layer_maxs, alpha=0.5, color='green', label='Min-Max Range')
+    ax3.plot(range(len(all_layer_names)), layer_means, 'o-', linewidth=2, markersize=6, color='red', label='Mean')
+    ax3.set_title(f'Channel Cosine Similarity Range Across Layers\n{model1_name} vs {model2_name}')
+    ax3.set_xlabel('Layer')
+    ax3.set_ylabel('Cosine Similarity')
+    ax3.set_xticks(tick_positions)
+    ax3.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Distribution of cosine similarities across all channels and layers
+    all_similarities = []
+    for means in all_mean_sims:
+        all_similarities.extend(means)
+    
+    ax4.hist(all_similarities, bins=50, alpha=0.7, color='purple', density=True)
+    ax4.set_title(f'Distribution of Channel Cosine Similarities\n{model1_name} vs {model2_name}')
+    ax4.set_xlabel('Cosine Similarity')
+    ax4.set_ylabel('Density')
+    ax4.grid(True, alpha=0.3)
+    
+    # Add statistics to the plot
+    mean_sim = np.mean(all_similarities)
+    std_sim = np.std(all_similarities)
+    ax4.axvline(mean_sim, color='red', linestyle='--', label=f'Mean: {mean_sim:.3f}')
+    ax4.legend()
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'channel_cosine_similarity_overview.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+def visualize_channel_cosine_similarity_batch_stats(channel_cosine_sims_by_layer, extractor_layer_names, output_dir, model1_name="Model 1", model2_name="Model 2"):
+    """
+    Visualize batch statistics for channel-wise cosine similarities.
+    
+    Args:
+        channel_cosine_sims_by_layer (dict): Dictionary with layer indices as keys and cosine similarity stats as values
+        extractor_layer_names (dict): Dictionary mapping layer indices to layer names
+        output_dir (Path): Directory to save visualizations
+        model1_name (str): Name of the first model
+        model2_name (str): Name of the second model
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Create visualizations for each layer
+    for layer_idx in sorted(channel_cosine_sims_by_layer.keys()):
+        if not channel_cosine_sims_by_layer[layer_idx]:
+            continue
+            
+        layer_stats = channel_cosine_sims_by_layer[layer_idx]
+        
+        # Get actual layer name
+        layer_name = extractor_layer_names.get(layer_idx, f"Layer_{layer_idx}")
+        safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
+        
+        # Create figure with 2x2 subplots (removing heatmap)
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # Extract batch-wise statistics
+        batch_means = [stat['channel_cosine_sim_mean'] for stat in layer_stats]
+        batch_stds = [stat['channel_cosine_sim_std'] for stat in layer_stats]
+        batch_mins = [stat['channel_cosine_sim_min'] for stat in layer_stats]
+        batch_maxs = [stat['channel_cosine_sim_max'] for stat in layer_stats]
+        
+        # Convert to numpy arrays
+        batch_means = np.array(batch_means)  # Shape: (num_batches, num_channels)
+        batch_stds = np.array(batch_stds)
+        batch_mins = np.array(batch_mins)
+        batch_maxs = np.array(batch_maxs)
+        
+        # 1. Batch-wise mean cosine similarity per channel
+        channel_means = np.mean(batch_means, axis=0)
+        channel_stds = np.std(batch_means, axis=0)
+        
+        channels = range(len(channel_means))
+        ax1.errorbar(channels, channel_means, yerr=channel_stds, 
+                    marker='o', capsize=3, capthick=1, linewidth=1, markersize=4)
+        ax1.set_title(f'Channel-wise Mean Cosine Similarity ({layer_name})\n{model1_name} vs {model2_name}')
+        ax1.set_xlabel('Channel Index')
+        ax1.set_ylabel('Cosine Similarity')
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. Batch-wise standard deviation per channel
+        channel_std_means = np.mean(batch_stds, axis=0)
+        channel_std_stds = np.std(batch_stds, axis=0)
+        
+        ax2.errorbar(channels, channel_std_means, yerr=channel_std_stds,
+                    marker='s', capsize=3, capthick=1, linewidth=1, markersize=4, color='orange')
+        ax2.set_title(f'Channel-wise Standard Deviation ({layer_name})\n{model1_name} vs {model2_name}')
+        ax2.set_xlabel('Channel Index')
+        ax2.set_ylabel('Standard Deviation')
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. Min/Max range per channel (replacing heatmap)
+        channel_mins = np.mean(batch_mins, axis=0)
+        channel_maxs = np.mean(batch_maxs, axis=0)
+        
+        ax3.fill_between(channels, channel_mins, channel_maxs, alpha=0.5, color='lightblue', label='Min-Max Range')
+        ax3.plot(channels, channel_means, 'o-', linewidth=1, markersize=4, color='blue', label='Mean')
+        ax3.set_title(f'Channel-wise Range ({layer_name})\n{model1_name} vs {model2_name}')
+        ax3.set_xlabel('Channel Index')
+        ax3.set_ylabel('Cosine Similarity')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # 4. Distribution of cosine similarities across all batches and channels
+        all_similarities = batch_means.flatten()
+        
+        ax4.hist(all_similarities, bins=30, alpha=0.7, color='green', density=True)
+        ax4.set_title(f'Distribution of Cosine Similarities ({layer_name})\n{model1_name} vs {model2_name}')
+        ax4.set_xlabel('Cosine Similarity')
+        ax4.set_ylabel('Density')
+        ax4.grid(True, alpha=0.3)
+        
+        # Add statistics
+        mean_sim = np.mean(all_similarities)
+        std_sim = np.std(all_similarities)
+        ax4.axvline(mean_sim, color='red', linestyle='--', label=f'Mean: {mean_sim:.3f}')
+        ax4.legend()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f'channel_cosine_similarity_{safe_layer_name}.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+
+def visualize_channel_cosine_similarity_comparison(channel_cosine_sims_by_layer, extractor_layer_names, output_dir, model1_name="Model 1", model2_name="Model 2"):
+    """
+    Create comparison visualizations for channel-wise cosine similarities.
+    
+    Args:
+        channel_cosine_sims_by_layer (dict): Dictionary with layer indices as keys and cosine similarity stats as values
+        extractor_layer_names (dict): Dictionary mapping layer indices to layer names
+        output_dir (Path): Directory to save visualizations
+        model1_name (str): Name of the first model
+        model2_name (str): Name of the second model
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Collect summary statistics across all layers
+    layer_summaries = []
+    
+    for layer_idx in sorted(channel_cosine_sims_by_layer.keys()):
+        if channel_cosine_sims_by_layer[layer_idx]:
+            layer_stats = channel_cosine_sims_by_layer[layer_idx]
+            
+            # Calculate overall statistics for this layer
+            all_similarities = []
+            for stat in layer_stats:
+                all_similarities.extend(stat['channel_cosine_sim_mean'])
+            
+            # Get actual layer name
+            layer_name = extractor_layer_names.get(layer_idx, f"Layer_{layer_idx}")
+            
+            layer_summaries.append({
+                'layer_idx': layer_idx,
+                'layer_name': layer_name,
+                'mean': np.mean(all_similarities),
+                'std': np.std(all_similarities),
+                'min': np.min(all_similarities),
+                'max': np.max(all_similarities),
+                'num_channels': len(layer_stats[0]['channel_cosine_sim_mean'])
+            })
+    
+    if not layer_summaries:
+        return
+    
+    # Create comparison plots
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+    
+    layers = [summary['layer_idx'] for summary in layer_summaries]
+    layer_names = [summary['layer_name'] for summary in layer_summaries]
+    means = [summary['mean'] for summary in layer_summaries]
+    stds = [summary['std'] for summary in layer_summaries]
+    mins = [summary['min'] for summary in layer_summaries]
+    maxs = [summary['max'] for summary in layer_summaries]
+    num_channels = [summary['num_channels'] for summary in layer_summaries]
+    
+    # Create better x-tick spacing
+    if len(layers) <= 10:
+        tick_indices = layers
+        tick_labels = layer_names
+    else:
+        step = max(1, len(layers) // 10)
+        tick_indices = layers[::step]
+        tick_labels = [layer_names[i] for i in range(0, len(layer_names), step)]
+        if layers[-1] not in tick_indices:
+            tick_indices.append(layers[-1])
+            tick_labels.append(layer_names[-1])
+    
+    # 1. Mean cosine similarity across layers
+    ax1.plot(layers, means, 'o-', linewidth=2, markersize=8, color='blue')
+    ax1.fill_between(layers, [m-s for m, s in zip(means, stds)], 
+                     [m+s for m, s in zip(means, stds)], alpha=0.3, color='blue')
+    ax1.set_title(f'Mean Channel Cosine Similarity Across Layers\n{model1_name} vs {model2_name}')
+    ax1.set_xlabel('Layer')
+    ax1.set_ylabel('Mean Cosine Similarity')
+    ax1.set_xticks(tick_indices)
+    ax1.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Min/Max range across layers
+    ax2.fill_between(layers, mins, maxs, alpha=0.5, color='green', label='Min-Max Range')
+    ax2.plot(layers, means, 'o-', linewidth=2, markersize=6, color='red', label='Mean')
+    ax2.set_title(f'Channel Cosine Similarity Range Across Layers\n{model1_name} vs {model2_name}')
+    ax2.set_xlabel('Layer')
+    ax2.set_ylabel('Cosine Similarity')
+    ax2.set_xticks(tick_indices)
+    ax2.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Standard deviation across layers
+    ax3.plot(layers, stds, 's-', linewidth=2, markersize=8, color='orange')
+    ax3.set_title(f'Channel Cosine Similarity Standard Deviation Across Layers\n{model1_name} vs {model2_name}')
+    ax3.set_xlabel('Layer')
+    ax3.set_ylabel('Standard Deviation')
+    ax3.set_xticks(tick_indices)
+    ax3.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Number of channels vs mean similarity
+    scatter = ax4.scatter(num_channels, means, s=100, alpha=0.7, c=layers, cmap='viridis')
+    ax4.set_title(f'Number of Channels vs Mean Similarity\n{model1_name} vs {model2_name}')
+    ax4.set_xlabel('Number of Channels')
+    ax4.set_ylabel('Mean Cosine Similarity')
+    ax4.grid(True, alpha=0.3)
+    
+    # Add colorbar for layer indices
+    cbar = plt.colorbar(scatter, ax=ax4)
+    cbar.set_label('Layer Index')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'channel_cosine_similarity_comparison.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+def convert_numpy_to_lists(obj):
+    """
+    Recursively convert numpy arrays to lists for JSON serialization.
+    
+    Args:
+        obj: Object that may contain numpy arrays
+        
+    Returns:
+        Object with all numpy arrays converted to lists
+    """
+    if isinstance(obj, dict):
+        return {key: convert_numpy_to_lists(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_to_lists(item) for item in obj]
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    else:
+        return obj
 
 def main():
     args = get_arguments()
@@ -1625,6 +1886,9 @@ def main():
     # Lists to store per-sample cosine similarities for each layer
     per_sample_cosine_sims = {layer: [] for layer in target_layers}
     
+    # Lists to store channel-wise cosine similarities for each layer
+    channel_cosine_sims_by_layer = {layer: [] for layer in target_layers}
+    
     processed_samples = 0
 
     for batch_idx, data in enumerate(test_loader):
@@ -1656,6 +1920,10 @@ def main():
             # Calculate per-sample cosine similarities
             batch_sims = calculate_per_sample_cosine_similarity(features1[layer_idx], features2[layer_idx])
             per_sample_cosine_sims[layer_idx].extend(batch_sims)
+            
+            # Calculate channel-wise cosine similarities
+            channel_cosine_stats = calculate_channel_cosine_similarity(features1[layer_idx], features2[layer_idx])
+            channel_cosine_sims_by_layer[layer_idx].append(channel_cosine_stats)
             
             # Log statistics for this layer
             stats = calculate_statistics(features1[layer_idx], features2[layer_idx])
@@ -1779,9 +2047,25 @@ def main():
             features_dir
         )
         
+        # Calculate aggregated channel-wise cosine similarity statistics
+        logger.info("Calculating aggregated channel-wise cosine similarity statistics...")
+        for layer_idx in target_layers:
+            if layer_idx in channel_cosine_sims_by_layer and channel_cosine_sims_by_layer[layer_idx]:
+                # Get all feature maps for this layer
+                layer_features1 = [all_features1_by_layer[layer_idx][i] for i in range(len(all_features1_by_layer[layer_idx]))]
+                layer_features2 = [all_features2_by_layer[layer_idx][i] for i in range(len(all_features2_by_layer[layer_idx]))]
+                
+                # Calculate aggregated statistics
+                aggregated_channel_stats = calculate_channel_cosine_similarity_batch(layer_features1, layer_features2)
+                
+                # Add to cumulative stats
+                layer_name = extractor1.layer_names[layer_idx]
+                cumulative_stats[f'channel_cosine_sim_{layer_name}'] = aggregated_channel_stats
+        
         # Save cumulative statistics to file
+        cumulative_stats_serializable = convert_numpy_to_lists(cumulative_stats)
         with open(os.path.join(features_dir, "cumulative_stats.json"), "w") as f:
-            json.dump(cumulative_stats, f, indent=2)
+            json.dump(cumulative_stats_serializable, f, indent=2)
 
     # Also save a summary file with statistics from all layers
     with open(os.path.join(features_dir, "all_layers_summary.txt"), "w") as f:
@@ -1799,12 +2083,63 @@ def main():
                 f.write(f"Layer {layer_idx} ({extractor1.layer_names[layer_idx]}):\n")
                 for key, value in avg_stats.items():
                     f.write(f"  {key}: {value:.4f}\n")
+                
+                # Add channel-wise cosine similarity statistics
+                if layer_idx in channel_cosine_sims_by_layer and channel_cosine_sims_by_layer[layer_idx]:
+                    f.write("  Channel-wise cosine similarity statistics:\n")
+                    # Calculate average channel cosine similarity stats across batches
+                    channel_stats = channel_cosine_sims_by_layer[layer_idx]
+                    avg_channel_stats = {
+                        'overall_cosine_sim_mean': np.mean([stat['overall_cosine_sim_mean'] for stat in channel_stats]),
+                        'overall_cosine_sim_std': np.mean([stat['overall_cosine_sim_std'] for stat in channel_stats]),
+                        'overall_cosine_sim_min': np.mean([stat['overall_cosine_sim_min'] for stat in channel_stats]),
+                        'overall_cosine_sim_max': np.mean([stat['overall_cosine_sim_max'] for stat in channel_stats]),
+                    }
+                    for key, value in avg_channel_stats.items():
+                        f.write(f"    {key}: {value:.4f}\n")
+                
                 f.write("\n")
             else:
                 layer_name = extractor1.layer_names.get(layer_idx, f"unknown_layer_{layer_idx}")
                 f.write(f"Layer {layer_idx} ({layer_name}): No statistics collected\n\n")
 
     logger.info("Feature extraction complete")
+
+    # Generate channel-wise cosine similarity visualizations
+    if channel_cosine_sims_by_layer:
+        logger.info("Generating channel-wise cosine similarity visualizations...")
+        
+        # Create directory for channel cosine similarity visualizations
+        channel_cosine_dir = os.path.join(features_dir, "channel_cosine_similarity")
+        if not os.path.exists(channel_cosine_dir):
+            os.makedirs(channel_cosine_dir)
+        
+        # Generate overview visualizations
+        visualize_channel_cosine_similarity_distributions(
+            channel_cosine_sims_by_layer,
+            extractor1.layer_names,  # Pass the layer names
+            channel_cosine_dir,
+            model1_name,
+            model2_name
+        )
+        
+        # Generate batch statistics visualizations
+        visualize_channel_cosine_similarity_batch_stats(
+            channel_cosine_sims_by_layer,
+            extractor1.layer_names,  # Pass the layer names
+            channel_cosine_dir,
+            model1_name,
+            model2_name
+        )
+        
+        # Generate comparison visualizations
+        visualize_channel_cosine_similarity_comparison(
+            channel_cosine_sims_by_layer,
+            extractor1.layer_names,  # Pass the layer names
+            channel_cosine_dir,
+            model1_name,
+            model2_name
+        )
 
 
 if __name__ == "__main__":
