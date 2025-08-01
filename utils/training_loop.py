@@ -4,6 +4,7 @@ import json
 import numpy as np
 import torch
 import torch.optim as optim
+import wandb
 
 from datetime import datetime
 
@@ -37,10 +38,25 @@ class TrainingLoop:
         self.gpu = gpu
         self.multi_label = multi_label
         self.start_time = time.time()
+        
+        # Track best performance
+        self.best_auc = 0.0
+        self.best_epoch = 0
+        self.best_checkpoint_path = None
 
         if not os.path.exists(self.args.exp_dir):
             os.makedirs(self.args.exp_dir)
         
+    def log_batchnorm_weight_means(self):
+        """
+        Log the average weight for each BatchNorm layer to wandb.
+        """
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                wandb.log(
+                    {f"BatchNorm/{name}_weight_mean": module.weight.data.mean().item()},
+                )
+
     def train_epoch(self, epoch):
         """Run one epoch of training"""
         self.model.train()
@@ -63,6 +79,9 @@ class TrainingLoop:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
+            # Log BatchNorm weight means after each batch
+            self.log_batchnorm_weight_means()
 
             if step % self.args.print_freq == 0:
                 pg = self.optimizer.param_groups
@@ -133,11 +152,21 @@ class TrainingLoop:
         )
         avg_valid_loss = np.average(all_valid_loss)
 
+        # Update best performance tracking
+        current_auc = float(avg_auc_all) if hasattr(avg_auc_all, 'item') else float(avg_auc_all)
+        if current_auc > self.best_auc:
+            self.best_auc = current_auc
+            self.best_epoch = epoch
+            # Save the best model state immediately to disk
+            self.save_best_checkpoint(epoch)
+
         stats = dict(
             epoch=epoch,
             all_auc=all_auc.tolist(),
-            avg_auc=avg_auc_all.tolist(),
+            avg_auc=avg_auc_all.tolist() if hasattr(avg_auc_all, 'tolist') else float(avg_auc_all),
             validation_loss=avg_valid_loss,
+            best_auc=self.best_auc,
+            best_epoch=self.best_epoch,
         )
 
         log_stats(
@@ -146,6 +175,8 @@ class TrainingLoop:
                 "avg_auc": stats["avg_auc"],
                 "all_auc": stats["all_auc"],
                 "validation_loss": stats["validation_loss"],
+                "best_auc": stats["best_auc"],
+                "best_epoch": stats["best_epoch"],
             }
         )
 
@@ -164,12 +195,23 @@ class TrainingLoop:
             self.dataset_handler.calculate_auc(all_outputs, all_targets)
         )
         avg_valid_loss = np.average(all_valid_loss)
+        
+        # Update best performance tracking
+        current_auc = float(avg_auc_all) if hasattr(avg_auc_all, 'item') else float(avg_auc_all)
+        if current_auc > self.best_auc:
+            self.best_auc = current_auc
+            self.best_epoch = epoch
+            # Save the best model state immediately to disk
+            self.save_best_checkpoint(epoch)
+            
         stats = dict(
             epoch=epoch,
             all_auc=auc_dict,
             avg_auc=float(avg_auc_all),
             avg_auc_of_interest=float(avg_auc_of_interest),
             validation_loss=avg_valid_loss,
+            best_auc=self.best_auc,
+            best_epoch=self.best_epoch,
         )
 
         log_stats(
@@ -179,6 +221,8 @@ class TrainingLoop:
                 "avg_auc": stats["avg_auc"],
                 "avg_auc_of_interest": stats["avg_auc_of_interest"],
                 "validation_loss": stats["validation_loss"],
+                "best_auc": stats["best_auc"],
+                "best_epoch": stats["best_epoch"],
             }
         )
 
@@ -187,6 +231,22 @@ class TrainingLoop:
             logger.info(json.dumps(stats), file=self.stats_file)
 
         return all_auc, avg_auc_all
+
+    def log_batchnorm_weights(self):
+        """
+        Log the weights of BatchNorm layers to wandb.
+        """
+        bn_layers = []
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                bn_layers.append((name, module))
+        
+        for name, module in bn_layers:
+            # Log the weight and bias histograms
+            wandb.log({
+                f"BatchNorm/{name}_weight": wandb.Histogram(module.weight.data.cpu().numpy()),
+                f"BatchNorm/{name}_bias": wandb.Histogram(module.bias.data.cpu().numpy()),
+            })
 
     def train(self, start_epoch: int, num_epochs: int):
         """Main training loop"""
@@ -214,6 +274,23 @@ class TrainingLoop:
         checkpoint_path = os.path.join(self.args.exp_dir, f"checkpoint_{date_str}_epoch{epoch+1}.pth")
         torch.save(state, checkpoint_path)
         logger.info(f"Saved checkpoint to {checkpoint_path}")
+    
+    def save_best_checkpoint(self, epoch: int):
+        """Save the best model checkpoint based on validation metrics"""
+        date_str = datetime.now().strftime("%Y%m%d")
+        best_checkpoint_path = os.path.join(self.args.exp_dir, f"best_epoch_{date_str}.pth")
+        
+        best_state = dict(
+            epoch=epoch + 1,
+            best_auc=self.best_auc,
+            model=self.model.state_dict(),
+            optimizer=self.optimizer.state_dict(),
+            scheduler=self.scheduler.state_dict(),
+        )
+        
+        torch.save(best_state, best_checkpoint_path)
+        self.best_checkpoint_path = best_checkpoint_path
+        logger.info(f"Saved best model checkpoint to {best_checkpoint_path} (epoch {epoch + 1}, AUC: {self.best_auc:.4f})")
         
 
 def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:
