@@ -643,6 +643,14 @@ def main():
         "BCN2K VICREG RadImageNet": "./layer_comparisons/bcn2k_Base_VICREG_RadImageNet_VS_VICREG_RadImageNet"
     }
     
+    # Define the comparison directories for Messidor
+    messidor_comparison_dirs = {
+        "Messidor Supervised ImageNet": "./layer_comparisons/messidor_Base_Supervised_ImageNet_VS_Supervised_Imagenet",
+        "Messidor VICREG ImageNet": "./layer_comparisons/messidor_Base_VICREG_ImageNet_VS_VICREG_ImageNet",
+        "Messidor Supervised RadImageNet": "./layer_comparisons/messidor_Base_Supervised_RadImageNet_VS_Supervised_RadImageNet",
+        "Messidor VICREG RadImageNet": "./layer_comparisons/messidor_Base_VICREG_RadImageNet_VS_VICREG_RadImageNet"
+    }
+    
     # Check which ChexPert directories exist
     existing_chexpert_comparisons = {}
     for name, path in chexpert_comparison_dirs.items():
@@ -670,11 +678,20 @@ def main():
         else:
             print(f"Warning: BCN2K comparison directory not found: {path}")
     
+    # Check which Messidor directories exist
+    existing_messidor_comparisons = {}
+    for name, path in messidor_comparison_dirs.items():
+        if os.path.exists(path):
+            existing_messidor_comparisons[name] = path
+            print(f"Found Messidor comparison: {name}")
+        else:
+            print(f"Warning: Messidor comparison directory not found: {path}")
+    
     # Create output directories
     chexpert_output_dir = "comprehensive_comparison_chexpert"
     vindrcxr_output_dir = "comprehensive_comparison_vindrcxr"
     bcn2k_output_dir = "comprehensive_comparison_bcn2k"
-    
+    messidor_output_dir = "comprehensive_comparison_messidor"
     # Process ChexPert comparisons if any exist
     if existing_chexpert_comparisons:
         print(f"\nCreating ChexPert comprehensive comparison plots...")
@@ -762,6 +779,33 @@ def main():
     else:
         print("No BCN2K comparison directories found!")
     
-
+    # Process Messidor comparisons if any exist
+    if existing_messidor_comparisons:
+        print(f"\nCreating Messidor comprehensive comparison plots...")
+        
+        # 1. Main comprehensive comparison
+        create_comprehensive_comparison_plot(existing_messidor_comparisons, messidor_output_dir)
+        
+        # 2. Cumulative comparison
+        create_cumulative_comparison_plot(existing_messidor_comparisons, messidor_output_dir)
+        
+        # 2b. Layer ratio comparison
+        create_layer_ratio_comparison_plot(existing_messidor_comparisons, messidor_output_dir)
+        
+        # 3. Strategy comparison (Supervised vs VICREG)
+        create_strategy_comparison_plot(existing_messidor_comparisons, messidor_output_dir)
+        
+        # 4. Pretrained dataset comparison (ImageNet vs RadImageNet)
+        create_pretrained_dataset_comparison_plot(existing_messidor_comparisons, messidor_output_dir)
+        
+        print(f"\nMessidor comparison plots saved to {messidor_output_dir}/")
+        print("Files created:")
+        print("- comprehensive_model_comparison.png")
+        print("- cumulative_comparison.png") 
+        print("- layer_ratio_comparison.png")
+        print("- strategy_comparison.png")
+        print("- pretrained_dataset_comparison.png")
+    else:
+        print("No Messidor comparison directories found!")
 if __name__ == "__main__":
     main() 
