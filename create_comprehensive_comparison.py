@@ -6,11 +6,12 @@ Combines figures from different pretrained datasets and training strategies.
 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+import matplotlib.patches as patches
+from matplotlib import cm
 import numpy as np
 import os
 import json
 import re
-import numpy as np
 
 # Centralized color and style mapping for consistency across all plots
 # Colors for pretraining datasets
@@ -20,6 +21,39 @@ RADIMAGENET_COLOR = '#ff7f0e'  # Orange
 # Line styles for training strategies
 SUPERVISED_LINESTYLE = '-'  # Solid line
 VICREG_LINESTYLE = '-.'  # Dashed line
+
+AUROC_SCORES_BY_TASK = {
+        "Chexpert": {
+            "Chexpert Supervised ImageNet": 0.8383,
+            "Chexpert VICREG ImageNet": 0.8012,
+            "Chexpert Supervised RadImageNet": 0.8374,
+            "Chexpert VICREG RadImageNet": 0.8402,
+        },
+        "MIMIC-CXR": {
+            "MIMIC-CXR Supervised ImageNet": 0.7620,
+            "MIMIC-CXR VICREG ImageNet": 0.7768,
+            "MIMIC-CXR Supervised RadImageNet": 0.7951,
+            "MIMIC-CXR VICREG RadImageNet": 0.7953,
+        },
+        "VINDR-CXR": {
+            "VINDR-CXR Supervised ImageNet": 0.6349,
+            "VINDR-CXR VICREG ImageNet": 0.6557,
+            "VINDR-CXR Supervised RadImageNet": 0.6405,
+            "VINDR-CXR VICREG RadImageNet": 0.6288,
+        },
+        "Messidor": {
+            "Messidor Supervised ImageNet": 0.8444,
+            "Messidor VICREG ImageNet": 0.8382,
+            "Messidor Supervised RadImageNet": 0.8004,
+            "Messidor VICREG RadImageNet": 0.7991,
+        },
+        "BCN2K": {
+            "BCN2K Supervised ImageNet": 0.9310,
+            "BCN2K VICREG ImageNet": 0.9519,
+            "BCN2K Supervised RadImageNet": 0.9009,
+            "BCN2K VICREG RadImageNet": 0.9233
+        }
+    }
 
 def get_model_style_mapping(comparison_names):
     """
@@ -69,6 +103,23 @@ def load_cumulative_stats(comparison_dir):
         with open(stats_file, 'r') as f:
             return json.load(f)
     return None
+
+# New: Load aggregated channel cosine stats
+
+def load_aggregated_channel_stats(comparison_dir):
+    """Load aggregated channel cosine statistics and layer names from a comparison directory.
+    Returns None if missing.
+    """
+    agg_file = os.path.join(comparison_dir, "feature_comparisons", "aggregated_channel_stats_by_layer.json")
+    names_file = os.path.join(comparison_dir, "feature_comparisons", "layer_names.json")
+    if not (os.path.exists(agg_file) and os.path.exists(names_file)):
+        return None
+    with open(agg_file, 'r') as f:
+        agg = json.load(f)
+    with open(names_file, 'r') as f:
+        layer_names = {int(k): v for k, v in json.load(f).items()}
+    return {"aggregated": {int(k): v for k, v in agg.items()}, "layer_names": layer_names}
+
 
 def create_comprehensive_comparison_plot(comparison_dirs, output_dir="comprehensive_comparison"):
     """
@@ -167,7 +218,6 @@ def create_comprehensive_comparison_plot(comparison_dirs, output_dir="comprehens
                         ax_ratios.set_xticklabels(layer_names[1:], rotation=45, ha='right', fontsize=8)
                         ax_ratios.set_ylim(0, 4)
                         ax_ratios.grid(True, alpha=0.3)
-                        ax_ratios.axhline(y=1, color='black', linestyle='--', alpha=0.3)
                 else:
                     # Create empty subplots if no data
                     for ax, title in [(ax_l2, "L2 Distance"), (ax_cosine, "Cosine Similarity"), (ax_ratios, "Layer Ratios")]:
@@ -198,6 +248,829 @@ def create_comprehensive_comparison_plot(comparison_dirs, output_dir="comprehens
                 dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Comprehensive comparison saved to {output_dir}/comprehensive_model_comparison.png")
+
+# Helper: filter target layers (top-level + bottleneck outputs layer1-3)
+
+def filter_layer_indices_for_channel_cos(layer_names_map, layer_indices_sorted):
+    filtered_pairs = []
+    for idx in layer_indices_sorted:
+        name = layer_names_map.get(idx, "")
+        if name in ['conv1', 'bn1', 'relu', 'maxpool']:
+            filtered_pairs.append((idx, name))
+            continue
+        if re.match(r'^layer[123]\.\d+$', name):
+            filtered_pairs.append((idx, name))
+            continue
+    return filtered_pairs
+
+def create_all_tasks_channel_cosine_page(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+    filename: str = "all_tasks_channel_cosine.png",
+):
+    """Create a 2x2 page: one subplot per task dataset, overlaying channel-wise cosine similarity per comparison.
+    dataset_to_dirs maps dataset name (Chexpert, VINDR-CXR, BCN2K, Messidor) -> {comparison_name: path}.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Rank models within each task
+    ranked_models_by_task = {}
+    for task, scores in AUROC_SCORES_BY_TASK.items():
+        sorted_models = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        ranked_models_by_task[task] = {name: rank + 1 for rank, (name, _) in enumerate(sorted_models)}
+
+    fig, axes = plt.subplots(5, 1, figsize=(16, 20))
+    axes = axes.flatten()
+
+    # Maintain consistent style mapping across all comparisons
+    all_comp_names = []
+    for dirs in dataset_to_dirs.values():
+        all_comp_names.extend(list(dirs.keys()))
+    style_mapping = get_model_style_mapping(all_comp_names)
+
+    dataset_names = list(dataset_to_dirs.keys())
+    for ax_idx, dataset_name in enumerate(dataset_names):
+        ax = axes[ax_idx]
+        comparisons = dataset_to_dirs.get(dataset_name, {})
+        if not comparisons:
+            ax.text(0.5, 0.5, f"No data for {dataset_name}", ha='center', va='center')
+            ax.axis('off')
+            continue
+
+        plotted_any = False
+        x_ticks = None
+        x_labels = None
+
+        for comp_name, comp_path in comparisons.items():
+            loaded = load_aggregated_channel_stats(comp_path)
+            if not loaded:
+                continue
+            agg = loaded["aggregated"]
+            layer_names_map = loaded["layer_names"]
+            # Sort layer indices, then filter to target layers
+            sorted_layer_indices = sorted(agg.keys())
+            filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+            if not filtered:
+                continue
+
+            # Prepare X (layer names) and Y (mean over channels per layer)
+            layer_indices = [idx for idx, _ in filtered]
+            layer_labels = [layer_names_map[idx] for idx in layer_indices]
+
+            y_vals = []
+            for idx in layer_indices:
+                stats = agg.get(idx)
+                if not stats:
+                    y_vals.append(np.nan)
+                    continue
+                # channel_cosine_sim_mean is an array per channel; average across channels
+                chan_means = stats.get('channel_cosine_sim_mean')
+                if isinstance(chan_means, list) and len(chan_means) > 0:
+                    y_vals.append(float(np.mean(chan_means)))
+                else:
+                    # fallback to overall mean if available
+                    overall = stats.get('overall_cosine_sim_mean')
+                    y_vals.append(float(overall) if overall is not None else np.nan)
+
+            color = get_model_color(comp_name, style_mapping)
+            linestyle = get_model_linestyle(comp_name, style_mapping)
+            # Update legend with rank
+            rank = ranked_models_by_task[dataset_name].get(comp_name, "N/A")
+            ax.plot(range(len(layer_indices)), y_vals, 'o-', linewidth=2, markersize=4,
+                    label=f"{comp_name} ({rank})", color=color, linestyle=linestyle)
+            plotted_any = True
+
+            if x_ticks is None:
+                x_ticks = list(range(len(layer_indices)))
+                x_labels = layer_labels
+
+        if plotted_any and x_ticks is not None and x_labels is not None:
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+            ax.set_ylim(-0.2, 1.0)
+            ax.grid(True, alpha=0.3)
+            ax.set_title(f"{dataset_name}: Channel-wise Cosine Similarity (mean across channels)")
+            ax.legend(loc='best', fontsize=8)
+        else:
+            ax.text(0.5, 0.5, f"No channel cosine stats for {dataset_name}", ha='center', va='center')
+            ax.axis('off')
+
+    plt.suptitle("Channel-wise Cosine Similarity Across Tasks", fontsize=18, fontweight='bold')
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    out_path = os.path.join(output_dir, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Channel cosine comparison saved to {out_path}")
+
+
+def create_pretraining_strategy_performance_plot(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+    filename: str = "pretraining_strategy_performance.png",
+):
+    """Create a plot showing how each pretraining strategy + dataset combination performs across all downstream tasks.
+    Each subplot shows one pretraining combination (e.g., "Supervised ImageNet") across all tasks.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Extract unique pretraining combinations
+    pretraining_combinations = set()
+    for task_scores in AUROC_SCORES_BY_TASK.values():
+        for model_name in task_scores.keys():
+            # Extract the pretraining strategy + dataset part
+            if "Supervised ImageNet" in model_name:
+                pretraining_combinations.add("Supervised ImageNet")
+            elif "VICREG ImageNet" in model_name:
+                pretraining_combinations.add("VICREG ImageNet")
+            elif "Supervised RadImageNet" in model_name:
+                pretraining_combinations.add("Supervised RadImageNet")
+            elif "VICREG RadImageNet" in model_name:
+                pretraining_combinations.add("VICREG RadImageNet")
+
+    pretraining_combinations = sorted(list(pretraining_combinations))
+    
+    # Create style mapping for pretraining combinations
+    style_mapping = get_model_style_mapping(pretraining_combinations)
+
+    # Create 2x2 subplot layout
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+
+    # Get all available tasks
+    available_tasks = list(dataset_to_dirs.keys())
+    
+    for ax_idx, pretraining_combo in enumerate(pretraining_combinations):
+        ax = axes[ax_idx]
+        
+        # Collect AUROC scores for this pretraining combination across all tasks
+        task_names = []
+        auroc_scores = []
+        
+        for task_name in available_tasks:
+            task_scores = AUROC_SCORES_BY_TASK.get(task_name, {})
+            # Find the model name that matches this pretraining combination
+            matching_model = None
+            for model_name in task_scores.keys():
+                if pretraining_combo in model_name:
+                    matching_model = model_name
+                    break
+            
+            if matching_model and matching_model in task_scores:
+                task_names.append(task_name)
+                auroc_scores.append(task_scores[matching_model])
+        
+        if not task_names:
+            ax.text(0.5, 0.5, f"No data for {pretraining_combo}", ha='center', va='center')
+            ax.axis('off')
+            continue
+
+        # Create bar plot
+        bars = ax.bar(range(len(task_names)), auroc_scores, 
+                     color=get_model_color(pretraining_combo, style_mapping),
+                     alpha=0.7, edgecolor='black', linewidth=0.5)
+        
+        # Add value labels on top of bars
+        for i, (bar, score) in enumerate(zip(bars, auroc_scores)):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                   f'{score:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        # Customize the plot
+        ax.set_xticks(range(len(task_names)))
+        ax.set_xticklabels(task_names, rotation=45, ha='right', fontsize=10)
+        ax.set_ylabel('AUROC Score', fontsize=12)
+        ax.set_title(f'{pretraining_combo}\nPerformance Across Tasks', fontsize=12, fontweight='bold')
+        ax.set_ylim(0.5, 1.0)  # AUROC range
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        ax.legend(fontsize=8)
+
+    # Remove empty subplots if we have fewer than 4 combinations
+    for ax_idx in range(len(pretraining_combinations), 4):
+        axes[ax_idx].axis('off')
+
+    plt.suptitle('Pretraining Strategy Performance Across Downstream Tasks', 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    
+    out_path = os.path.join(output_dir, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Pretraining strategy performance plot saved to {out_path}")
+
+
+def create_pretraining_strategy_cosine_similarity_plot(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+    filename: str = "pretraining_strategy_cosine_similarity.png",
+):
+    """Create a plot showing cosine similarity at each layer for each pretraining strategy + dataset combination.
+    Each subplot shows one pretraining combination with cosine similarity across layers for all available tasks.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Extract unique pretraining combinations
+    pretraining_combinations = set()
+    for task_scores in AUROC_SCORES_BY_TASK.values():
+        for model_name in task_scores.keys():
+            # Extract the pretraining strategy + dataset part
+            if "Supervised ImageNet" in model_name:
+                pretraining_combinations.add("Supervised ImageNet")
+            elif "VICREG ImageNet" in model_name:
+                pretraining_combinations.add("VICREG ImageNet")
+            elif "Supervised RadImageNet" in model_name:
+                pretraining_combinations.add("Supervised RadImageNet")
+            elif "VICREG RadImageNet" in model_name:
+                pretraining_combinations.add("VICREG RadImageNet")
+
+    pretraining_combinations = sorted(list(pretraining_combinations))
+    
+    # Create style mapping for pretraining combinations
+    style_mapping = get_model_style_mapping(pretraining_combinations)
+
+    # Create 2x2 subplot layout
+    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+    axes = axes.flatten()
+
+    # Get all available tasks
+    available_tasks = list(dataset_to_dirs.keys())
+    
+    for ax_idx, pretraining_combo in enumerate(pretraining_combinations):
+        ax = axes[ax_idx]
+        
+        plotted_any = False
+        x_ticks = None
+        x_labels = None
+        
+        # Plot cosine similarity for each task that uses this pretraining combination
+        for task_name in available_tasks:
+            task_comparisons = dataset_to_dirs.get(task_name, {})
+            if not task_comparisons:
+                continue
+                
+            # Find the comparison that matches this pretraining combination
+            matching_comparison = None
+            for comp_name in task_comparisons.keys():
+                if pretraining_combo in comp_name:
+                    matching_comparison = comp_name
+                    break
+            
+            if not matching_comparison:
+                continue
+                
+            comp_path = task_comparisons[matching_comparison]
+            
+            # Load cumulative stats for cosine similarity
+            stats = load_cumulative_stats(comp_path)
+            if not stats or 'cosine_similarities' not in stats:
+                continue
+                
+            # Filter to target layers
+            filtered_stats = filter_stats_for_target_layers(stats)
+            if not filtered_stats:
+                continue
+                
+            layer_names = filtered_stats['layer_names']
+            cosine_sims = filtered_stats['cosine_similarities']
+            
+            # Plot the cosine similarity line
+            ax.plot(range(len(layer_names)), cosine_sims, 'o-', linewidth=2, markersize=4,
+                   label=task_name, alpha=0.8)
+            plotted_any = True
+            
+            if x_ticks is None:
+                x_ticks = list(range(len(layer_names)))
+                x_labels = layer_names
+        
+        if plotted_any and x_ticks is not None and x_labels is not None:
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+            ax.set_ylim(-0.2, 1.0)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('Layer', fontsize=12)
+            ax.set_ylabel('Cosine Similarity', fontsize=12)
+            ax.set_title(f'{pretraining_combo}\nCosine Similarity Across Layers', fontsize=12, fontweight='bold')
+            ax.legend(fontsize=8, loc='best')
+        else:
+            ax.text(0.5, 0.5, f"No cosine similarity data for {pretraining_combo}", 
+                   ha='center', va='center', fontsize=12)
+            ax.axis('off')
+
+    # Remove empty subplots if we have fewer than 4 combinations
+    for ax_idx in range(len(pretraining_combinations), 4):
+        axes[ax_idx].axis('off')
+
+    plt.suptitle('Cosine Similarity Across Layers by Pretraining Strategy', 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    
+    out_path = os.path.join(output_dir, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Pretraining strategy cosine similarity plot saved to {out_path}")
+
+
+def create_pretraining_strategy_channel_cosine_boxplot(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+    filename: str = "pretraining_strategy_channel_cosine_boxplot.png",
+):
+    """Create a plot showing box plots of channel cosine similarity at each layer for each pretraining strategy + dataset combination.
+    Each subplot shows one pretraining combination with separate box plots for each downstream task.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Extract unique pretraining combinations
+    pretraining_combinations = set()
+    for task_scores in AUROC_SCORES_BY_TASK.values():
+        for model_name in task_scores.keys():
+            # Extract the pretraining strategy + dataset part
+            if "Supervised ImageNet" in model_name:
+                pretraining_combinations.add("Supervised ImageNet")
+            elif "VICREG ImageNet" in model_name:
+                pretraining_combinations.add("VICREG ImageNet")
+            elif "Supervised RadImageNet" in model_name:
+                pretraining_combinations.add("Supervised RadImageNet")
+            elif "VICREG RadImageNet" in model_name:
+                pretraining_combinations.add("VICREG RadImageNet")
+
+    pretraining_combinations = sorted(list(pretraining_combinations))
+    
+    # Create style mapping for pretraining combinations
+    style_mapping = get_model_style_mapping(pretraining_combinations)
+
+    # Create 2x2 subplot layout
+    fig, axes = plt.subplots(2, 2, figsize=(24, 18))
+    axes = axes.flatten()
+
+    # Get all available tasks
+    available_tasks = list(dataset_to_dirs.keys())
+    
+    for ax_idx, pretraining_combo in enumerate(pretraining_combinations):
+        ax = axes[ax_idx]
+        
+        plotted_any = False
+        all_task_data = {}  # task_name -> {layer_name -> list of channel cosine similarities}
+        layer_names = None
+        
+        # Collect channel cosine similarity data for each task that uses this pretraining combination
+        for task_name in available_tasks:
+            task_comparisons = dataset_to_dirs.get(task_name, {})
+            if not task_comparisons:
+                continue
+                
+            # Find the comparison that matches this pretraining combination
+            matching_comparison = None
+            for comp_name in task_comparisons.keys():
+                if pretraining_combo in comp_name:
+                    matching_comparison = comp_name
+                    break
+            
+            if not matching_comparison:
+                continue
+                
+            comp_path = task_comparisons[matching_comparison]
+            
+            # Load aggregated channel stats
+            loaded = load_aggregated_channel_stats(comp_path)
+            if not loaded:
+                continue
+                
+            agg = loaded["aggregated"]
+            layer_names_map = loaded["layer_names"]
+            
+            # Sort layer indices, then filter to target layers
+            sorted_layer_indices = sorted(agg.keys())
+            filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+            if not filtered:
+                continue
+                
+            # Store layer names (should be the same for all tasks)
+            if layer_names is None:
+                layer_names = [layer_name for _, layer_name in filtered]
+            
+            # Collect channel cosine similarities for each layer for this task
+            task_layer_data = {}
+            for layer_idx, layer_name in filtered:
+                stats = agg.get(layer_idx)
+                if not stats:
+                    continue
+                    
+                # Get channel cosine similarities (array per channel)
+                chan_means = stats.get('channel_cosine_sim_mean')
+                if isinstance(chan_means, list) and len(chan_means) > 0:
+                    task_layer_data[layer_name] = chan_means
+                    plotted_any = True
+            
+            if task_layer_data:
+                all_task_data[task_name] = task_layer_data
+        
+        if plotted_any and all_task_data and layer_names:
+            # Create grouped box plots
+            # Each group will be a layer, and within each group we'll have boxes for each task
+            n_layers = len(layer_names)
+            n_tasks = len(all_task_data)
+            task_names = list(all_task_data.keys())
+            
+            # Calculate positions for grouped box plots
+            box_width = 0.8 / n_tasks  # Width of each box
+            layer_positions = np.arange(n_layers)
+            
+            # Define colors for different tasks
+            task_colors = cm.get_cmap('Set3')(np.linspace(0, 1, n_tasks))
+            
+            # Plot box plots for each task
+            for task_idx, task_name in enumerate(task_names):
+                task_data = all_task_data[task_name]
+                task_positions = layer_positions + (task_idx - n_tasks/2 + 0.5) * box_width
+                
+                # Prepare data for this task
+                layer_data = []
+                positions = []
+                for layer_name in layer_names:
+                    if layer_name in task_data:
+                        layer_data.append(task_data[layer_name])
+                        positions.append(task_positions[layer_names.index(layer_name)])
+                
+                if layer_data:
+                    # Create box plot for this task
+                    box_plot = ax.boxplot(layer_data, positions=positions, widths=box_width*0.8, 
+                                        patch_artist=True, labels=[''] * len(layer_data))
+                    
+                    # Color the boxes for this task
+                    for patch in box_plot['boxes']:
+                        patch.set_facecolor(task_colors[task_idx])
+                        patch.set_alpha(0.7)
+            
+            # Customize the plot
+            ax.set_xticks(layer_positions)
+            ax.set_xticklabels(layer_names, rotation=45, ha='right', fontsize=9)
+            ax.set_ylim(-0.2, 1.0)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('Layer', fontsize=12)
+            ax.set_ylabel('Channel Cosine Similarity', fontsize=12)
+            ax.set_title(f'{pretraining_combo}\nChannel Cosine Similarity Distribution Across Layers', 
+                        fontsize=12, fontweight='bold')
+            
+            # Create custom legend for tasks
+            legend_elements = [patches.Rectangle((0,0),1,1, facecolor=task_colors[i], alpha=0.7, label=task_name) 
+                             for i, task_name in enumerate(task_names)]
+            ax.legend(handles=legend_elements, fontsize=8, loc='best')
+        else:
+            ax.text(0.5, 0.5, f"No channel cosine similarity data for {pretraining_combo}", 
+                   ha='center', va='center', fontsize=12)
+            ax.axis('off')
+
+    # Remove empty subplots if we have fewer than 4 combinations
+    for ax_idx in range(len(pretraining_combinations), 4):
+        axes[ax_idx].axis('off')
+
+    plt.suptitle('Channel Cosine Similarity Distribution Across Layers by Pretraining Strategy', 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    
+    out_path = os.path.join(output_dir, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Pretraining strategy channel cosine boxplot saved to {out_path}")
+
+
+def create_comprehensive_channel_cosine_heatmap(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+    filename: str = "comprehensive_channel_cosine_heatmap.png",
+):
+    """Create a comprehensive heatmap showing channel cosine similarity for each combination of 
+    pretraining strategy + pretraining dataset + downstream task.
+    Y-axis: Layers, X-axis: Channel Cosine Similarity, Each subplot: One combination
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Collect all combinations
+    all_combinations = []
+    for task_name, task_comparisons in dataset_to_dirs.items():
+        for comp_name, comp_path in task_comparisons.items():
+            # Extract pretraining strategy and dataset from comparison name
+            if "Supervised ImageNet" in comp_name and "RadImageNet" not in comp_name:
+                pretraining_strategy = "Supervised"
+                pretraining_dataset = "ImageNet"
+            elif "VICREG ImageNet" in comp_name and "RadImageNet" not in comp_name:
+                pretraining_strategy = "VICREG"
+                pretraining_dataset = "ImageNet"
+            elif "Supervised RadImageNet" in comp_name:
+                pretraining_strategy = "Supervised"
+                pretraining_dataset = "RadImageNet"
+            elif "VICREG RadImageNet" in comp_name:
+                pretraining_strategy = "VICREG"
+                pretraining_dataset = "RadImageNet"
+            else:
+                continue
+            
+            all_combinations.append({
+                'task_name': task_name,
+                'pretraining_strategy': pretraining_strategy,
+                'pretraining_dataset': pretraining_dataset,
+                'comp_name': comp_name,
+                'comp_path': comp_path
+            })
+
+    if not all_combinations:
+        print("No valid combinations found!")
+        return
+
+    # Sort combinations for consistent ordering
+    all_combinations.sort(key=lambda x: (x['pretraining_strategy'], x['pretraining_dataset'], x['task_name']))
+
+    # Calculate grid dimensions
+    n_combinations = len(all_combinations)
+    n_cols = 4  # Fixed number of columns
+    n_rows = (n_combinations + n_cols - 1) // n_cols  # Ceiling division
+
+    # Create the large figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(32, 8 * n_rows))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    axes = axes.flatten()
+
+    # Get layer names from first available combination
+    layer_names = None
+    for combo in all_combinations:
+        loaded = load_aggregated_channel_stats(combo['comp_path'])
+        if loaded:
+            layer_names_map = loaded["layer_names"]
+            sorted_layer_indices = sorted(loaded["aggregated"].keys())
+            filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+            if filtered:
+                layer_names = [layer_name for _, layer_name in filtered]
+                break
+
+    if not layer_names:
+        print("No layer data found!")
+        return
+
+    # Create style mapping for pretraining strategies and datasets
+    strategy_colors = {'Supervised': '#1f77b4', 'VICREG': '#ff7f0e'}
+    dataset_colors = {'ImageNet': '#2ca02c', 'RadImageNet': '#d62728'}
+
+    for ax_idx, combo in enumerate(all_combinations):
+        ax = axes[ax_idx]
+        
+        # Load data for this combination
+        loaded = load_aggregated_channel_stats(combo['comp_path'])
+        if not loaded:
+            ax.text(0.5, 0.5, f"No data for\n{combo['comp_name']}", 
+                   ha='center', va='center', fontsize=10)
+            ax.axis('off')
+            continue
+
+        agg = loaded["aggregated"]
+        layer_names_map = loaded["layer_names"]
+        
+        # Sort layer indices, then filter to target layers
+        sorted_layer_indices = sorted(agg.keys())
+        filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+        if not filtered:
+            ax.text(0.5, 0.5, f"No filtered data for\n{combo['comp_name']}", 
+                   ha='center', va='center', fontsize=10)
+            ax.axis('off')
+            continue
+
+        # Collect data for box plots
+        layer_data = []
+        layer_labels = []
+        
+        for layer_idx, layer_name in filtered:
+            stats = agg.get(layer_idx)
+            if not stats:
+                continue
+                
+            # Get channel cosine similarities (array per channel)
+            chan_means = stats.get('channel_cosine_sim_mean')
+            if isinstance(chan_means, list) and len(chan_means) > 0:
+                layer_data.append(chan_means)
+                layer_labels.append(layer_name)
+
+        if not layer_data:
+            ax.text(0.5, 0.5, f"No channel data for\n{combo['comp_name']}", 
+                   ha='center', va='center', fontsize=10)
+            ax.axis('off')
+            continue
+
+        # Create horizontal box plots (layers on y-axis, cosine similarity on x-axis)
+        positions = np.arange(len(layer_labels))
+        box_plot = ax.boxplot(layer_data, positions=positions, vert=False, patch_artist=True)
+        
+        # Color the boxes based on pretraining strategy and dataset
+        strategy_color = strategy_colors[combo['pretraining_strategy']]
+        dataset_color = dataset_colors[combo['pretraining_dataset']]
+        
+        # Create a mixed color for the boxes
+        for patch in box_plot['boxes']:
+            patch.set_facecolor(strategy_color)
+            patch.set_alpha(0.7)
+            # Add a border in the dataset color
+            patch.set_edgecolor(dataset_color)
+            patch.set_linewidth(2)
+
+        # Customize the plot
+        ax.set_yticks(positions)
+        ax.set_yticklabels(layer_labels, fontsize=8)
+        ax.set_xlim(0, 1.0)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Channel Cosine Similarity', fontsize=10)
+        ax.set_ylabel('Layer', fontsize=10)
+        
+        # Create title with strategy and dataset info
+        title = f"{combo['task_name']}\n{combo['pretraining_strategy']} + {combo['pretraining_dataset']}"
+        ax.set_title(title, fontsize=10, fontweight='bold')
+
+    # Hide unused subplots
+    for ax_idx in range(n_combinations, len(axes)):
+        axes[ax_idx].axis('off')
+
+    # Add overall title and legend
+    plt.suptitle('Channel Cosine Similarity Distribution by Layer for Each Pretraining Strategy + Dataset + Task Combination', 
+                 fontsize=16, fontweight='bold')
+    
+    # Create custom legend
+    legend_elements = [
+        patches.Rectangle((0,0),1,1, facecolor=strategy_colors['Supervised'], alpha=0.7, label='Supervised'),
+        patches.Rectangle((0,0),1,1, facecolor=strategy_colors['VICREG'], alpha=0.7, label='VICREG'),
+        patches.Rectangle((0,0),1,1, facecolor='white', edgecolor=dataset_colors['ImageNet'], linewidth=2, label='ImageNet'),
+        patches.Rectangle((0,0),1,1, facecolor='white', edgecolor=dataset_colors['RadImageNet'], linewidth=2, label='RadImageNet')
+    ]
+    
+    # Add legend to the figure
+    fig.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(0.98, 0.98), fontsize=12)
+
+    plt.tight_layout(rect=(0, 0, 0.95, 0.95))
+    
+    out_path = os.path.join(output_dir, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Comprehensive channel cosine heatmap saved to {out_path}")
+
+
+def create_task_specific_channel_cosine_plots(
+    dataset_to_dirs: dict,
+    output_dir: str = "comprehensive_comparison",
+):
+    """Create separate figures for each downstream task, showing all pretraining strategy + dataset combinations for that task.
+    Each figure shows horizontal box plots with layers on y-axis and channel cosine similarity on x-axis.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+
+    # Process each task separately
+    for task_name, task_comparisons in dataset_to_dirs.items():
+        if not task_comparisons:
+            continue
+            
+        print(f"Creating channel cosine plot for {task_name}...")
+        
+        # Collect combinations for this task
+        task_combinations = []
+        for comp_name, comp_path in task_comparisons.items():
+            # Extract pretraining strategy and dataset from comparison name
+            if "Supervised ImageNet" in comp_name and "RadImageNet" not in comp_name:
+                pretraining_strategy = "Supervised"
+                pretraining_dataset = "ImageNet"
+            elif "VICREG ImageNet" in comp_name and "RadImageNet" not in comp_name:
+                pretraining_strategy = "VICREG"
+                pretraining_dataset = "ImageNet"
+            elif "Supervised RadImageNet" in comp_name:
+                pretraining_strategy = "Supervised"
+                pretraining_dataset = "RadImageNet"
+            elif "VICREG RadImageNet" in comp_name:
+                pretraining_strategy = "VICREG"
+                pretraining_dataset = "RadImageNet"
+            else:
+                continue
+            
+            task_combinations.append({
+                'pretraining_strategy': pretraining_strategy,
+                'pretraining_dataset': pretraining_dataset,
+                'comp_name': comp_name,
+                'comp_path': comp_path
+            })
+
+        if not task_combinations:
+            print(f"No valid combinations found for {task_name}")
+            continue
+
+        # Sort combinations for consistent ordering
+        task_combinations.sort(key=lambda x: (x['pretraining_strategy'], x['pretraining_dataset']))
+
+        # Calculate grid dimensions (2x2 for 4 combinations)
+        n_combinations = len(task_combinations)
+        n_cols = 2
+        n_rows = 2
+
+        # Create figure for this task
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 12))
+        axes = axes.flatten()
+
+        # Get layer names from first available combination
+        layer_names = None
+        for combo in task_combinations:
+            loaded = load_aggregated_channel_stats(combo['comp_path'])
+            if loaded:
+                layer_names_map = loaded["layer_names"]
+                sorted_layer_indices = sorted(loaded["aggregated"].keys())
+                filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+                if filtered:
+                    layer_names = [layer_name for _, layer_name in filtered]
+                    break
+
+        if not layer_names:
+            print(f"No layer data found for {task_name}")
+            continue
+
+        for ax_idx, combo in enumerate(task_combinations):
+            ax = axes[ax_idx]
+            
+            # Load data for this combination
+            loaded = load_aggregated_channel_stats(combo['comp_path'])
+            if not loaded:
+                ax.text(0.5, 0.5, f"No data for\n{combo['comp_name']}", 
+                       ha='center', va='center', fontsize=12)
+                ax.axis('off')
+                continue
+
+            agg = loaded["aggregated"]
+            layer_names_map = loaded["layer_names"]
+            
+            # Sort layer indices, then filter to target layers
+            sorted_layer_indices = sorted(agg.keys())
+            filtered = filter_layer_indices_for_channel_cos(layer_names_map, sorted_layer_indices)
+            if not filtered:
+                ax.text(0.5, 0.5, f"No filtered data for\n{combo['comp_name']}", 
+                       ha='center', va='center', fontsize=12)
+                ax.axis('off')
+                continue
+
+            # Collect data for box plots
+            layer_data = []
+            layer_labels = []
+            
+            for layer_idx, layer_name in filtered:
+                stats = agg.get(layer_idx)
+                if not stats:
+                    continue
+                    
+                # Get channel cosine similarities (array per channel)
+                chan_means = stats.get('channel_cosine_sim_mean')
+                if isinstance(chan_means, list) and len(chan_means) > 0:
+                    layer_data.append(chan_means)
+                    layer_labels.append(layer_name)
+
+            if not layer_data:
+                ax.text(0.5, 0.5, f"No channel data for\n{combo['comp_name']}", 
+                       ha='center', va='center', fontsize=12)
+                ax.axis('off')
+                continue
+
+            # Create horizontal box plots (layers on y-axis, cosine similarity on x-axis)
+            positions = np.arange(len(layer_labels))
+            box_plot = ax.boxplot(layer_data, positions=positions, vert=False, patch_artist=True)
+
+            # Customize the plot
+            ax.set_yticks(positions)
+            ax.set_yticklabels(layer_labels, fontsize=10)
+            ax.set_xlim(0, 1.0)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('Channel Cosine Similarity', fontsize=12)
+            ax.set_ylabel('Layer', fontsize=12)
+            
+            # Create title with strategy and dataset info
+            title = f"{combo['pretraining_strategy']} + {combo['pretraining_dataset']}"
+            ax.set_title(title, fontsize=12, fontweight='bold')
+            
+
+        # Hide unused subplots
+        for ax_idx in range(n_combinations, len(axes)):
+            axes[ax_idx].axis('off')
+
+        # Add overall title and legend
+        plt.suptitle(f'{task_name}: Channel Cosine Similarity Distribution by Layer', 
+                     fontsize=16, fontweight='bold')
+        
+
+        plt.tight_layout(rect=(0, 0, 0.95, 0.95))
+        
+        # Save figure for this task
+        filename = f"{task_name.lower()}_channel_cosine_boxplots.png"
+        out_path = os.path.join(output_dir, filename)
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Channel cosine boxplots for {task_name} saved to {out_path}")
+
 
 def filter_stats_for_target_layers(stats):
     """
@@ -395,9 +1268,6 @@ def create_layer_ratio_comparison_plot(comparison_dirs, output_dir="comprehensiv
     ax.legend(fontsize=10, bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 4)
-    
-    # Add horizontal line at y=1 (indicating no change)
-    ax.axhline(y=1, color='black', linestyle='--', alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "layer_ratio_comparison.png"), 
@@ -616,6 +1486,22 @@ def create_pretrained_dataset_comparison_plot(comparison_dirs, output_dir="compr
     plt.close()
     print(f"Pretrained dataset comparison saved to {output_dir}/pretrained_dataset_comparison.png")
 
+def get_task_comparison_dirs(base_dir):
+    """Dynamically parse task comparison directories from the base directory."""
+    task_dirs = {}
+    for task_name in os.listdir(base_dir):
+        task_path = os.path.join(base_dir, task_name)
+        if os.path.isdir(task_path):
+            comparisons = {}
+            for comp_name in os.listdir(task_path):
+                comp_path = os.path.join(task_path, comp_name)
+                if os.path.isdir(comp_path):
+                    comparisons[comp_name] = comp_path
+            if comparisons:
+                task_dirs[task_name] = comparisons
+    return task_dirs
+
+
 def main():
     """Main function to create all comprehensive comparison plots."""
     
@@ -649,6 +1535,14 @@ def main():
         "Messidor VICREG ImageNet": "./layer_comparisons/messidor_Base_VICREG_ImageNet_VS_VICREG_ImageNet",
         "Messidor Supervised RadImageNet": "./layer_comparisons/messidor_Base_Supervised_RadImageNet_VS_Supervised_RadImageNet",
         "Messidor VICREG RadImageNet": "./layer_comparisons/messidor_Base_VICREG_RadImageNet_VS_VICREG_RadImageNet"
+    }
+
+    # Define the comparison directories for MIMIC-CXR
+    mimiccxr_comparison_dirs = {
+        "MIMIC-CXR Supervised ImageNet": "./layer_comparisons/mimiccxr_Base_Supervised_ImageNet_VS_Supervised_Imagenet",
+        "MIMIC-CXR VICREG ImageNet": "./layer_comparisons/mimiccxr_Base_VICREG_ImageNet_VS_VICREG_ImageNet",
+        "MIMIC-CXR Supervised RadImageNet": "./layer_comparisons/mimiccxr_Base_Supervised_RadImageNet_VS_Supervised_RadImageNet",
+        "MIMIC-CXR VICREG RadImageNet": "./layer_comparisons/mimiccxr_Base_VICREG_RadImageNet_VS_VICREG_RadImageNet"
     }
     
     # Check which ChexPert directories exist
@@ -687,11 +1581,21 @@ def main():
         else:
             print(f"Warning: Messidor comparison directory not found: {path}")
     
+    # Check which MIMIC-CXR directories exist
+    existing_mimiccxr_comparisons = {}
+    for name, path in mimiccxr_comparison_dirs.items():
+        if os.path.exists(path):
+            existing_mimiccxr_comparisons[name] = path
+            print(f"Found MIMIC-CXR comparison: {name}")
+        else:
+            print(f"Warning: MIMIC-CXR comparison directory not found: {path}")
+    
     # Create output directories
     chexpert_output_dir = "comprehensive_comparison_chexpert"
     vindrcxr_output_dir = "comprehensive_comparison_vindrcxr"
     bcn2k_output_dir = "comprehensive_comparison_bcn2k"
     messidor_output_dir = "comprehensive_comparison_messidor"
+    mimiccxr_output_dir = "comprehensive_comparison_mimiccxr"
     # Process ChexPert comparisons if any exist
     if existing_chexpert_comparisons:
         print(f"\nCreating ChexPert comprehensive comparison plots...")
@@ -807,5 +1711,75 @@ def main():
         print("- pretrained_dataset_comparison.png")
     else:
         print("No Messidor comparison directories found!")
+    
+    if existing_mimiccxr_comparisons:
+        print(f"\nCreating MIMIC-CXR comprehensive comparison plots...")
+        
+        # 1. Main comprehensive comparison
+        create_comprehensive_comparison_plot(existing_mimiccxr_comparisons, mimiccxr_output_dir)
+        
+        # 2. Cumulative comparison
+        create_cumulative_comparison_plot(existing_mimiccxr_comparisons, mimiccxr_output_dir)
+        
+        # 2b. Layer ratio comparison
+        create_layer_ratio_comparison_plot(existing_mimiccxr_comparisons, mimiccxr_output_dir)
+        
+        # 3. Strategy comparison (Supervised vs VICREG)
+        create_strategy_comparison_plot(existing_mimiccxr_comparisons, mimiccxr_output_dir)
+        
+        # 4. Pretrained dataset comparison (ImageNet vs RadImageNet)
+        create_pretrained_dataset_comparison_plot(existing_mimiccxr_comparisons, mimiccxr_output_dir)
+        
+        print(f"\nMIMIC-CXR comparison plots saved to {mimiccxr_output_dir}/")
+        print("Files created:")
+        print("- comprehensive_model_comparison.png")
+        print("- cumulative_comparison.png") 
+        print("- layer_ratio_comparison.png")
+        print("- strategy_comparison.png")
+        print("- pretrained_dataset_comparison.png")
+    else:
+        print("No MIMIC-CXR comparison directories found!")
+
+    # New: Combined page across tasks (Chexpert, VINDR-CXR, BCN2K, Messidor)
+    dataset_to_dirs = {}
+    if existing_chexpert_comparisons:
+        dataset_to_dirs["Chexpert"] = existing_chexpert_comparisons
+    if existing_vindrcxr_comparisons:
+        dataset_to_dirs["VINDR-CXR"] = existing_vindrcxr_comparisons
+    if existing_mimiccxr_comparisons:
+        dataset_to_dirs["MIMIC-CXR"] = existing_mimiccxr_comparisons
+    if existing_bcn2k_comparisons:
+        dataset_to_dirs["BCN2K"] = existing_bcn2k_comparisons
+    if existing_messidor_comparisons:
+        dataset_to_dirs["Messidor"] = existing_messidor_comparisons
+
+    if dataset_to_dirs:
+        print("\nCreating all-tasks channel cosine similarity page...")
+       
+        create_all_tasks_channel_cosine_page(dataset_to_dirs, output_dir="comprehensive_comparison", filename="all_tasks_channel_cosine.png")
+        
+        print("\nCreating pretraining strategy performance plot...")
+        
+        create_pretraining_strategy_performance_plot(dataset_to_dirs, output_dir="comprehensive_comparison", filename="pretraining_strategy_performance.png")
+        
+        print("\nCreating pretraining strategy cosine similarity plot...")
+        
+        create_pretraining_strategy_cosine_similarity_plot(dataset_to_dirs, output_dir="comprehensive_comparison", filename="pretraining_strategy_cosine_similarity.png")
+        
+        print("\nCreating pretraining strategy channel cosine boxplot...")
+        
+        create_pretraining_strategy_channel_cosine_boxplot(dataset_to_dirs, output_dir="comprehensive_comparison", filename="pretraining_strategy_channel_cosine_boxplot.png")
+        
+        print("\nCreating comprehensive channel cosine heatmap...")
+        
+        create_comprehensive_channel_cosine_heatmap(dataset_to_dirs, output_dir="comprehensive_comparison", filename="comprehensive_channel_cosine_heatmap.png")
+        
+        print("\nCreating task-specific channel cosine boxplots...")
+        
+        create_task_specific_channel_cosine_plots(dataset_to_dirs, output_dir="comprehensive_comparison")
+    else:
+        print("No datasets found to create all-tasks channel cosine page.")
+
+
 if __name__ == "__main__":
     main() 

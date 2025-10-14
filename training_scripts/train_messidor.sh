@@ -5,9 +5,10 @@
 # SBATCH --time=06:00:00
 # SBATCH --cpus-per-task=32
 # SBATCH --mem=125gb
-# SBATCH --gpus=v100s:1
+# SBATCH --gpus=a100:1
+# SBATCH --partition=wficai
 
-epochs=30
+epochs=15
 lr_backbone=1e-3
 lr_head=1e-2
 batch_size=64
@@ -40,18 +41,18 @@ cd /home/jplineb/VICReg/vicreg_mod/
 #     --workers $workers \
 #     --warmup-epochs $warmup_epochs
 
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs $epochs \
-#     --weights "finetune"  \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers \
-#     --warmup-epochs $warmup_epochs
+python evaluate_new.py \
+    --task_ds messidor \
+    --pretrained_path ./VICReg_ImageNet/resnet50.pth \
+    --pretrained-how VICReg \
+    --pretrained-dataset ImageNet \
+    --epochs $epochs \
+    --weights "finetune"  \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers \
+    --warmup-epochs $warmup_epochs
 
 python evaluate_new.py \
     --task_ds messidor \
@@ -94,19 +95,19 @@ python evaluate_new.py \
 #     --workers $workers \
 #     --warmup-epochs $warmup_epochs
 
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path "/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"\
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how Supervised \
-#     --pretrained-dataset RadImageNet \
-#     --epochs $epochs \
-#     --weights "finetune" \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers \
-#     --warmup-epochs $warmup_epochs
+python evaluate_new.py \
+    --task_ds messidor \
+    --pretrained_path "/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"\
+    --exp-dir ./checkpoint/try_new_script \
+    --pretrained-how Supervised \
+    --pretrained-dataset RadImageNet \
+    --epochs $epochs \
+    --weights "finetune" \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers \
+    --warmup-epochs $warmup_epochs
 
 # python evaluate_new.py \
 #     --task_ds messidor \
@@ -122,19 +123,19 @@ python evaluate_new.py \
 #     --workers $workers \
 #     --warmup-epochs $warmup_epochs
 
-# python evaluate_new.py \
-#     --task_ds messidor \
-#     --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
-#     --exp-dir ./checkpoint/try_new_script \
-#     --pretrained-how Supervised \
-#     --pretrained-dataset ImageNet \
-#     --epochs $epochs \
-#     --weights "finetune" \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers \
-#     --warmup-epochs $warmup_epochs
+python evaluate_new.py \
+    --task_ds messidor \
+    --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
+    --exp-dir ./checkpoint/try_new_script \
+    --pretrained-how Supervised \
+    --pretrained-dataset ImageNet \
+    --epochs $epochs \
+    --weights "finetune" \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers \
+    --warmup-epochs $warmup_epochs
 
 
 ########################################################

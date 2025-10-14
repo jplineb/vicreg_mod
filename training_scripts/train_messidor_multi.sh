@@ -1,12 +1,12 @@
 #!/bin/sh
 
-epochs=15
+epochs=20
 lr_backbone=1e-3
 lr_head=1e-2
 batch_size=64
 weightdecay=1e-6
 workers=16
-warmup_epochs=5
+warmup_epochs=3
 echo "----------------------------"
 echo "Executing on host: "$HOSTNAME
 echo "Performing Experiments"
@@ -36,8 +36,8 @@ for config in "${configs[@]}"; do
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=125gb
-#SBATCH --gpus=a100:1
-#SBATCH --partition=wficai
+#SBATCH --gpus=h200:1
+#SBATCH --partition=nextlab200
 
 module load miniforge3/24.3.0-0
 module load cuda/12.3

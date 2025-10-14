@@ -353,48 +353,36 @@ class VINDR_CXR:
         return predicted
 
     def calculate_auc(self, outputs, targets):
-        # Calculate metrics
         """
-        NOTE: setting average = None allows us to see score for every label
-        https://torchmetrics.readthedocs.io/en/stable/classification/auroc.html
+        Calculate AUROC metrics for multilabel classification:
+        - Per-label AUROC (average=None)
+        - Macro average AUROC (average="macro")
+        - Weighted average AUROC (average="weighted")
         """
-        # Calculate AUROC for the whole stack
-        au_roc = AUROC(task="multilabel", num_labels=13, average=None)
-        au_roc_average = AUROC(task="multilabel", num_labels=13)
-        auc_calc_all = au_roc(torch.stack(outputs), torch.stack(targets).int())
-        auc_roc_avg_all = au_roc_average(
-            torch.stack(outputs), torch.stack(targets).int()
-        )
+        outputs = torch.stack(outputs)
+        targets = torch.stack(targets).int()
 
-        # # Get the AUROCs of interest
+        number_of_labels = len(self.pathologies)
+
+        # Per-label AUROC
+        au_roc_none = AUROC(task="multilabel", num_labels=number_of_labels, average=None)
+        auc_calc_all = au_roc_none(outputs, targets)
+
+        # Macro average AUROC
+        au_roc_macro = AUROC(task="multilabel", num_labels=number_of_labels, average="macro")
+        auc_calc_macro = au_roc_macro(outputs, targets)
+
+        # Weighted average AUROC
+        au_roc_weighted = AUROC(task="multilabel", num_labels=number_of_labels, average="weighted")
+        auc_calc_weighted = au_roc_weighted(outputs, targets)
+
+        # Get the AUROCs of interest
         auc_dict = {}
         auc_of_interest = []
         for pathology, auc in zip(self.pathologies, auc_calc_all.tolist()):
-            # Store in master dict
             auc_dict[pathology] = auc
-            # If AUC in pathologies of interest put them in list
             if pathology in self.pathologies_of_interest:
                 auc_of_interest.append(auc)
+        auc_of_avg_interest = np.mean(auc_of_interest)  
 
-        # Get average of AUROC of interest
-        auc_of_avg_interest = 0
-
-        return auc_calc_all, auc_roc_avg_all, auc_of_avg_interest, auc_dict
-
-    def store_round_results(self, outputs, targets, views, patient_ids):
-        au_roc = AUROC(task="multilabel", num_labels=13, average=None)
-
-        all_results = []
-        for output, target, view, patient_id in zip(
-            outputs, targets, views, patient_ids
-        ):
-            auc_calc = au_roc(output, target)
-            # Create a dict for each row
-            results = dict(patient_id=patient_id, view=view)
-            # Loop and store in results
-            for pathology, auc in zip(self.pathologies, auc_calc):
-                results[pathology] = auc
-
-            all_results.append(results)
-
-        return all_results
+        return auc_calc_all, auc_calc_macro, auc_calc_weighted, auc_of_avg_interest, auc_dict

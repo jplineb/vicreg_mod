@@ -255,16 +255,17 @@ class Messidor:
         loss = loss_func(predictions, targets.cuda(self.gpu, non_blocking=True).long())
         return loss
 
-    def calculate_auc(self, outputs, targets) -> tuple[torch.Tensor, torch.Tensor]:
+    def calculate_auc(self, outputs, targets) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Calculate AUROC
-        # import pdb; pdb.set_trace()
         outputs = torch.stack(outputs)
         targets = torch.stack(targets).long()
 
         au_roc = AUROC(task="multiclass", num_classes=self.num_classes, average=None)
-        au_roc_average = AUROC(task="multiclass", num_classes=self.num_classes)
+        au_roc_macro = AUROC(task="multiclass", num_classes=self.num_classes, average="macro")
+        au_roc_weighted = AUROC(task="multiclass",  average="weighted", num_classes=self.num_classes)
 
         auc_calc_all = au_roc(outputs, targets)
-        auc_calc_avg = au_roc_average(outputs, targets)
+        auc_calc_macro = au_roc_macro(outputs, targets)
+        auc_calc_weighted = au_roc_weighted(outputs, targets)
 
-        return auc_calc_all, auc_calc_avg
+        return auc_calc_all, auc_calc_macro, auc_calc_weighted

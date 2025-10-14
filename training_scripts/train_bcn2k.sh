@@ -40,29 +40,29 @@ cd /home/jplineb/VICReg/vicreg_mod/
 #     --batch-size $batch_size \
 #     --workers $workers
 
-# python evaluate_new.py \
-#     --task_ds bcn_20000 \
-#     --pretrained_path ./VICReg_ImageNet/resnet50.pth \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset ImageNet \
-#     --epochs $epochs \
-#     --weights "finetune"  \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers
+python evaluate_new.py \
+    --task_ds bcn_20000 \
+    --pretrained_path ./VICReg_ImageNet/resnet50.pth \
+    --pretrained-how VICReg \
+    --pretrained-dataset ImageNet \
+    --epochs $epochs \
+    --weights "finetune"  \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers
 
-# python evaluate_new.py \
-#     --task_ds bcn_20000 \
-#     --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
-#     --pretrained-how VICReg \
-#     --pretrained-dataset RadImageNet \
-#     --epochs $epochs \
-#     --weights "finetune" \
-#     --lr-backbone $lr_backbone \
-#     --lr-head $lr_head \
-#     --batch-size $batch_size \
-#     --workers $workers 
+python evaluate_new.py \
+    --task_ds bcn_20000 \
+    --pretrained_path ./VICReg_RadImageNet/resnet50.pth \
+    --pretrained-how VICReg \
+    --pretrained-dataset RadImageNet \
+    --epochs $epochs \
+    --weights "finetune" \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers 
 
 # python evaluate_new.py \
 #     --task_ds bcn_20000 \
@@ -78,39 +78,25 @@ cd /home/jplineb/VICReg/vicreg_mod/
 #     --workers $workers 
 
 
-python evaluate_new.py \
-    --task_ds bcn_20000 \
-    --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
-    --pretrained-how Supervised \
-    --pretrained-dataset RadImageNet \
-    --epochs $epochs \
-    --weights "freeze" \
-    --lr-backbone $lr_backbone \
-    --lr-head $lr_head \
-    --batch-size $batch_size \
-    --workers $workers
-
 # python evaluate_new.py \
 #     --task_ds bcn_20000 \
-#     --pretrained_path "/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"\
-#     --exp-dir ./checkpoint/try_new_script \
+#     --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
 #     --pretrained-how Supervised \
 #     --pretrained-dataset RadImageNet \
 #     --epochs $epochs \
-#     --weights "finetune" \
+#     --weights "freeze" \
 #     --lr-backbone $lr_backbone \
 #     --lr-head $lr_head \
 #     --batch-size $batch_size \
-#     --workers $workers 
+#     --workers $workers
 
 python evaluate_new.py \
     --task_ds bcn_20000 \
-    --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
-    --exp-dir ./checkpoint/try_new_script \
+    --pretrained_path "/project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar"\
     --pretrained-how Supervised \
-    --pretrained-dataset ImageNet \
+    --pretrained-dataset RadImageNet \
     --epochs $epochs \
-    --weights "freeze" \
+    --weights "finetune" \
     --lr-backbone $lr_backbone \
     --lr-head $lr_head \
     --batch-size $batch_size \
@@ -123,11 +109,23 @@ python evaluate_new.py \
 #     --pretrained-how Supervised \
 #     --pretrained-dataset ImageNet \
 #     --epochs $epochs \
-#     --weights "finetune" \
+#     --weights "freeze" \
 #     --lr-backbone $lr_backbone \
 #     --lr-head $lr_head \
 #     --batch-size $batch_size \
 #     --workers $workers 
+
+python evaluate_new.py \
+    --task_ds bcn_20000 \
+    --pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar \
+    --pretrained-how Supervised \
+    --pretrained-dataset ImageNet \
+    --epochs $epochs \
+    --weights "finetune" \
+    --lr-backbone $lr_backbone \
+    --lr-head $lr_head \
+    --batch-size $batch_size \
+    --workers $workers 
 
 
 ########################################################

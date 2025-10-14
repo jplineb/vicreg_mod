@@ -16,3 +16,5 @@ VICReg_RadImageNet/stats_clean.txt
 .snakemake/
 *.png
 *.txt
+layer_comparisons*/
+*.zip

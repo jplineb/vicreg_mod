@@ -132,8 +132,8 @@ def environment_setup():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     repo = git.Repo(".", search_parent_directories=True)
     repo_root = Path(repo.working_tree_dir)
-    args.exp_dir = repo_root / "checkpoint" / f"{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{timestamp}"
-    args.exp_dir.mkdir(parents=True, exist_ok=True)
+    args.exp_dir = repo_root / "october_2025_checkpoint" / f"{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{args.weights}"
+    args.exp_dir.mkdir(parents=True, exist_ok=False)
     return args, gpu
 
 
@@ -142,7 +142,7 @@ def wandb_init(args):
     run_name = f"{args.pretrained_how} {args.pretrained_dataset} {args.weights} - {args.task_ds}"
     logger.info(f"Run name: {run_name}")
     wandb.init(
-        project="Cleaned_VICReg_Experiments",
+        project="New SSL Experiments",
         name=run_name,
         config={
             "backbone_learning_rate": args.lr_backbone,
@@ -196,6 +196,8 @@ def main():
     param_groups = [dict(params=model[-1].parameters(), lr=args.lr_head)]
     if args.weights == "finetune":
         param_groups.append(dict(params=model[:-1].parameters(), lr=args.lr_backbone))
+
+
     # Setup optimizer and scheduler
     optimizer = optim.Adam(param_groups, weight_decay=args.weight_decay)
     scheduler = create_scheduler(optimizer, args.epochs, args.warmup_epochs)

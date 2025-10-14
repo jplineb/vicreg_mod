@@ -1,17 +1,10 @@
 #!/bin/sh
 
-#SBATCH --job-name=train_vindrcxr
-#SBATCH --ntasks=1
-#SBATCH --time=06:00:00
-#SBATCH --cpus-per-task=48
-#SBATCH --mem=250gb
-#SBATCH --gpus=v100s:1
-#SBATCH --partition="work1"
 
-epochs=15
+epochs=20
 lr_backbone=1e-3
 lr_head=1e-2
-batch_size=64
+batch_size=128
 weightdecay=1e-6
 workers=48
 warmup_epochs=3
@@ -29,13 +22,13 @@ cd /home/jplineb/VICReg/vicreg_mod/
 
 # Define configurations
 configs=(
-    "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights freeze"
+    # "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights freeze"
     "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights finetune"
     "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights finetune"
-    "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights freeze"
-    "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights freeze"
+    # "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights freeze"
+    # "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights freeze"
     "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights finetune"
-    "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights freeze"
+    # "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights freeze"
     "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights finetune"
 )
 
@@ -48,8 +41,8 @@ for config in "${configs[@]}"; do
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=48
 #SBATCH --mem=250gb
-#SBATCH --gpus=v100s:1
-#SBATCH --partition="work1"
+#SBATCH --gpus=h200:1
+#SBATCH --partition=nextlab200
 
 module load miniforge3/24.3.0-0
 module load cuda/12.3
@@ -59,7 +52,6 @@ cd /home/jplineb/VICReg/vicreg_mod/
 
 python evaluate_new.py \
     --task_ds mimiccxr \
-    --exp-dir ./checkpoint/try_new_script \
     --epochs $epochs \
     --lr-backbone $lr_backbone \
     --lr-head $lr_head \

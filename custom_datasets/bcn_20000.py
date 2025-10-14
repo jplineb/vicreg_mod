@@ -235,7 +235,6 @@ class BCN20000:
         au_roc = AUROC(task="multiclass", num_classes=self.num_classes, average=None)
         au_roc_average = AUROC(task="multiclass", num_classes=self.num_classes)
 
-        # import pdb; pdb.set_trace()
 
         auc_calc_all = au_roc(outputs, targets)
         auc_calc_avg = au_roc_average(outputs, targets)

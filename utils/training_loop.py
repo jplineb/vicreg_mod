@@ -56,8 +56,28 @@ class TrainingLoop:
                 wandb.log(
                     {f"BatchNorm/{name}_weight_mean": module.weight.data.mean().item()},
                 )
+    
+    def get_all_conv_layer_weights(self) -> dict[str, float]:
+        """
+        Log weights of all conv layers in the model for comprehensive monitoring.
+        Tracks all convolutional layers throughout the entire model.
+        """        
+        weight_stats = {}
+        
+        # Track all conv layers in the model
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                # Create a clean layer name for logging
+                clean_name = name.replace('.', '_').replace('module_', '')
+                weight_stats[f'Conv/{clean_name}_weight_mean'] = module.weight.data.mean().item()
+                weight_stats[f'Conv/{clean_name}_weight_std'] = module.weight.data.std().item()
+                weight_stats[f'Conv/{clean_name}_weight_min'] = module.weight.data.min().item()
+                weight_stats[f'Conv/{clean_name}_weight_max'] = module.weight.data.max().item()
+        
+        return weight_stats
+    
 
-    def train_epoch(self, epoch):
+    def train_epoch(self, epoch: int):
         """Run one epoch of training"""
         self.model.train()
 
@@ -80,25 +100,27 @@ class TrainingLoop:
             loss.backward()
             self.optimizer.step()
 
-            # Log BatchNorm weight means after each batch
-            self.log_batchnorm_weight_means()
-
+            # if step % self.args.print_freq == 0:
+            # Fetch parameters for logging
+            pg = self.optimizer.param_groups
+            lr_head = pg[0]["lr"]
+            lr_backbone = pg[1]["lr"] if len(pg) == 2 else 0
+            # Build stats and log to wandb
+            stats = dict(
+                epoch=epoch,
+                step=step,
+                lr_backbone=lr_backbone,
+                lr_head=lr_head,
+                loss=loss.item(),
+                time=int(time.time() - self.start_time),
+            )
+            log_stats(stats)
             if step % self.args.print_freq == 0:
-                pg = self.optimizer.param_groups
-                lr_head = pg[0]["lr"]
-                lr_backbone = pg[1]["lr"] if len(pg) == 2 else 0
-                stats = dict(
-                    epoch=epoch,
-                    step=step,
-                    lr_backbone=lr_backbone,
-                    lr_head=lr_head,
-                    loss=loss.item(),
-                    time=int(time.time() - self.start_time),
-                )
-                log_stats(stats)
                 logger.info(json.dumps(stats))
+                
                 if self.stats_file:
                     logger.info(json.dumps(stats), file=self.stats_file)
+            
 
             del images
             del target
@@ -127,33 +149,38 @@ class TrainingLoop:
                 all_valid_loss.append(valid_loss.item())
 
         if self.multi_label:
-            all_auc, avg_auc_all = (
+            stats = (
                 self.calculate_multi_label_validation_stats(
                     epoch, all_outputs, all_targets, all_valid_loss
                 )
             )
         else:
-            all_auc, avg_auc_all = (
+            stats = (
                 self.calculate_single_label_validation_stats(
                     epoch, all_outputs, all_targets, all_valid_loss
                 )
             )
+        # Calculate all conv layer weights
+        conv_layer_weights = self.get_all_conv_layer_weights()
+        # Flatten conv layer weights
+        stats = {**stats, **conv_layer_weights}
+
         del all_outputs
         del all_targets
 
-        return all_auc, avg_auc_all
+        return stats
     
     def calculate_single_label_validation_stats(
         self, epoch: int, all_outputs, all_targets, all_valid_loss
-    ):
+    ) -> dict:
         """Calculate and log validation statistics"""
-        all_auc, avg_auc_all = (
+        all_auc, avg_auc_macro, avg_auc_weighted = (
             self.dataset_handler.calculate_auc(all_outputs, all_targets)
         )
         avg_valid_loss = np.average(all_valid_loss)
 
         # Update best performance tracking
-        current_auc = float(avg_auc_all) if hasattr(avg_auc_all, 'item') else float(avg_auc_all)
+        current_auc = float(avg_auc_macro) if hasattr(avg_auc_macro, 'item') else float(avg_auc_macro)
         if current_auc > self.best_auc:
             self.best_auc = current_auc
             self.best_epoch = epoch
@@ -163,41 +190,32 @@ class TrainingLoop:
         stats = dict(
             epoch=epoch,
             all_auc=all_auc.tolist(),
-            avg_auc=avg_auc_all.tolist() if hasattr(avg_auc_all, 'tolist') else float(avg_auc_all),
+            avg_auc_macro=avg_auc_macro.tolist() if hasattr(avg_auc_macro, 'tolist') else float(avg_auc_macro),
+            avg_auc_weighted=avg_auc_weighted.tolist() if hasattr(avg_auc_weighted, 'tolist') else float(avg_auc_weighted),
             validation_loss=avg_valid_loss,
             best_auc=self.best_auc,
             best_epoch=self.best_epoch,
-        )
-
-        log_stats(
-            {
-                "epoch": epoch,
-                "avg_auc": stats["avg_auc"],
-                "all_auc": stats["all_auc"],
-                "validation_loss": stats["validation_loss"],
-                "best_auc": stats["best_auc"],
-                "best_epoch": stats["best_epoch"],
-            }
         )
 
         logger.info(json.dumps(stats))
         if self.stats_file:
             logger.info(json.dumps(stats), file=self.stats_file)
 
-        return all_auc, avg_auc_all
+        return stats
         
 
     def calculate_multi_label_validation_stats(
         self, epoch: int, all_outputs, all_targets, all_valid_loss
-    ):
+    ) -> dict:
         """Calculate and log validation statistics"""
-        all_auc, avg_auc_all, avg_auc_of_interest, auc_dict = (
+        auc_calc_all, auc_calc_macro, auc_calc_weighted, auc_of_avg_interest, auc_dict = (
             self.dataset_handler.calculate_auc(all_outputs, all_targets)
         )
         avg_valid_loss = np.average(all_valid_loss)
         
         # Update best performance tracking
-        current_auc = float(avg_auc_all) if hasattr(avg_auc_all, 'item') else float(avg_auc_all)
+        ## Use macro for best performance tracking
+        current_auc = float(auc_calc_macro) if hasattr(auc_calc_macro, 'item') else float(auc_calc_macro)
         if current_auc > self.best_auc:
             self.best_auc = current_auc
             self.best_epoch = epoch
@@ -206,31 +224,21 @@ class TrainingLoop:
             
         stats = dict(
             epoch=epoch,
-            all_auc=auc_dict,
-            avg_auc=float(avg_auc_all),
-            avg_auc_of_interest=float(avg_auc_of_interest),
+            all_auc=auc_calc_all.tolist(),
+            avg_auc_macro=float(auc_calc_macro),
+            avg_auc_weighted=float(auc_calc_weighted),
+            avg_auc_of_interest=float(auc_of_avg_interest),
             validation_loss=avg_valid_loss,
             best_auc=self.best_auc,
             best_epoch=self.best_epoch,
-        )
-
-        log_stats(
-            {
-                "epoch": epoch,
-                **auc_dict,
-                "avg_auc": stats["avg_auc"],
-                "avg_auc_of_interest": stats["avg_auc_of_interest"],
-                "validation_loss": stats["validation_loss"],
-                "best_auc": stats["best_auc"],
-                "best_epoch": stats["best_epoch"],
-            }
+            auc_dict=auc_dict,
         )
 
         logger.info(json.dumps(stats))
         if self.stats_file:
             logger.info(json.dumps(stats), file=self.stats_file)
 
-        return all_auc, avg_auc_all
+        return stats
 
     def log_batchnorm_weights(self):
         """
@@ -253,13 +261,16 @@ class TrainingLoop:
         for epoch in range(start_epoch, num_epochs):
             logger.info("Beginning training")
             self.train_epoch(epoch)
-            all_auc, avg_auc_all = self.evaluate(epoch)
+            evaluation_stats = self.evaluate(epoch)
             self.scheduler.step()
 
+            # Log eval stats to wandb
+            log_stats(evaluation_stats)
+
+            # Build state
             state = dict(
-                epoch=epoch + 1,
-                all_auc=all_auc.tolist(),
-                best_auc=avg_auc_all.tolist(),
+                epoch=epoch,
+                stats=evaluation_stats,
                 model=self.model.state_dict(),
                 optimizer=self.optimizer.state_dict(),
                 scheduler=self.scheduler.state_dict(),
@@ -270,18 +281,17 @@ class TrainingLoop:
     
     def save_checkpoint(self, state, epoch: int):
         """Save checkpoint"""
-        date_str = datetime.now().strftime("%Y%m%d")
-        checkpoint_path = os.path.join(self.args.exp_dir, f"checkpoint_{date_str}_epoch{epoch+1}.pth")
+        checkpoint_path = os.path.join(self.args.exp_dir, f"checkpoint_epoch_{epoch}.pth")
         torch.save(state, checkpoint_path)
         logger.info(f"Saved checkpoint to {checkpoint_path}")
     
     def save_best_checkpoint(self, epoch: int):
         """Save the best model checkpoint based on validation metrics"""
         date_str = datetime.now().strftime("%Y%m%d")
-        best_checkpoint_path = os.path.join(self.args.exp_dir, f"best_epoch_{date_str}.pth")
+        best_checkpoint_path = os.path.join(self.args.exp_dir, f"best_epoch_{epoch}.pth")
         
         best_state = dict(
-            epoch=epoch + 1,
+            epoch=epoch,
             best_auc=self.best_auc,
             model=self.model.state_dict(),
             optimizer=self.optimizer.state_dict(),
@@ -290,7 +300,7 @@ class TrainingLoop:
         
         torch.save(best_state, best_checkpoint_path)
         self.best_checkpoint_path = best_checkpoint_path
-        logger.info(f"Saved best model checkpoint to {best_checkpoint_path} (epoch {epoch + 1}, AUC: {self.best_auc:.4f})")
+        logger.info(f"Saved best model checkpoint to {best_checkpoint_path} (epoch {epoch}, AUC: {self.best_auc:.4f})")
         
 
 def create_scheduler(optimizer, total_epochs, warmup_epochs) -> optim.lr_scheduler.SequentialLR:

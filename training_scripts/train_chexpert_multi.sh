@@ -29,13 +29,13 @@ cd /home/jplineb/VICReg/vicreg_mod/
 
 # Define configurations
 configs=(
-    "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights freeze"
+    # "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights freeze"
     "--pretrained_path ./VICReg_ImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset ImageNet --weights finetune"
     "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights finetune"
-    "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights freeze"
-    "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights freeze"
+    # "--pretrained_path ./VICReg_RadImageNet/resnet50.pth --pretrained-how VICReg --pretrained-dataset RadImageNet --weights freeze"
+    # "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights freeze"
     "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset RadImageNet --weights finetune"
-    "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights freeze"
+    # "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights freeze"
     "--pretrained_path /project/dane2/wficai/BenchMD/models/pretrained/supervised/radimagenet/checkpoint-159.pth.tar --pretrained-how Supervised --pretrained-dataset ImageNet --weights finetune"
 )
 
