@@ -133,7 +133,7 @@ def environment_setup():
     repo = git.Repo(".", search_parent_directories=True)
     repo_root = Path(repo.working_tree_dir)
     args.exp_dir = repo_root / "october_2025_checkpoint" / f"{args.task_ds}_{args.pretrained_how}_{args.pretrained_dataset}_{args.weights}"
-    args.exp_dir.mkdir(parents=True, exist_ok=False)
+    args.exp_dir.mkdir(parents=True, exist_ok=True)
     return args, gpu
 
 

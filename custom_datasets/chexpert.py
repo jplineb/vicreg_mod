@@ -177,15 +177,15 @@ class Chexpert:
         targets = torch.stack(targets).int()
 
         # Per-label AUROC
-        au_roc_none = AUROC(task="multilabel", num_labels=14, average=None)
+        au_roc_none = AUROC(task="multilabel", num_labels=self.num_classes, average=None)
         auc_calc_all = au_roc_none(outputs, targets)
 
         # Macro average AUROC
-        au_roc_macro = AUROC(task="multilabel", num_labels=14, average="macro")
+        au_roc_macro = AUROC(task="multilabel", num_labels=self.num_classes, average="macro")
         auc_calc_macro = au_roc_macro(outputs, targets)
 
         # Weighted average AUROC
-        au_roc_weighted = AUROC(task="multilabel", num_labels=14, average="weighted")
+        au_roc_weighted = AUROC(task="multilabel", num_labels=self.num_classes, average="weighted")
         auc_calc_weighted = au_roc_weighted(outputs, targets)
 
         # Get the AUROCs of interest

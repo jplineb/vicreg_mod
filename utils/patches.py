@@ -14,9 +14,9 @@ def log_stats(stats) -> None:
                 logger.info(json.dumps(stats))
                 return
             
-            logger.info(f"Logging to wandb: {stats}")
+            # logger.info(f"Logging to wandb: {stats}")
             wandb.log(stats)
-            logger.info("Successfully logged to wandb")
+            # logger.info("Successfully logged to wandb")
         except Exception as e:
             logger.error(f"Failed to log to wandb: {e}")
             logger.info(json.dumps(stats))

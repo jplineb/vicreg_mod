@@ -78,7 +78,7 @@ class MIMIC_CXR_BASE(VisionDataset):
         dtype=np.int32,
     )
     LABEL_FRACS = {"small": 8, "medium": 64, "large": 256, "full": np.inf}
-    NUM_CLASSES = 14  # 14 total: len(self.CHEXPERT_LABELS_IDX)
+    NUM_CLASSES = 14
     INPUT_SIZE = (224, 224)
     PATCH_SIZE = (16, 16)
     IN_CHANNELS = 1
@@ -91,7 +91,6 @@ class MIMIC_CXR_BASE(VisionDataset):
         train: bool = True,
         finetune_size: str | None = None,
     ):
-        # self.root = os.path.join(base_root, 'chest_xray', 'mimic-cxr')
         self.root = base_root
         super().__init__(self.root)
         # self.index_location = self.find_data()
