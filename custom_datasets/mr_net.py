@@ -8,6 +8,7 @@ from torchmetrics import AUROC
 from matplotlib import pyplot as plt
 from PIL import Image
 from torchxrayvision.datasets import xrv
+from sklearn.model_selection import StratifiedKFold
 
 
 class MRNetBase(VisionDataset):
@@ -28,15 +29,19 @@ class MRNetBase(VisionDataset):
         root: str,
         split: str = "train",
         transforms_pytorch: str | None | transforms.Compose = "txrv",
+        index_file_path: str | None = None,
     ):
         self._transforms_pytorch = transforms_pytorch
         assert self._transforms_pytorch is not None
         super().__init__(root, transform=self.transforms_pytorch)
 
         self.split = split
-        self.index_file = pd.read_csv(
-            os.path.join(self.root, f"{self.split}_index.csv")
-        )
+        if index_file_path is not None:
+            self.index_file = pd.read_csv(index_file_path)
+        else:
+            self.index_file = pd.read_csv(
+                os.path.join(self.root, f"{self.split}_index.csv")
+            )
         
 
     @property
@@ -87,6 +92,7 @@ class MRNetBase(VisionDataset):
         sample["idx"] = index
         sample["pnum"] = pnum
         sample["lab"] = lab
+        sample["view"] = self.training_view
         sample["img"] = img
         
         return sample
@@ -168,130 +174,230 @@ class MRNet:
     def build_index_cv(self, k: int = 4):
         """
         Builds k-fold cross-validation indices with balanced class distribution using sklearn's StratifiedKFold.
-        Saves the splits in cv_splits folder as {fold}_{split}_index.csv
+        Creates combined splits (like build_index) with all tasks, stratified on 'abnormal' label.
+        Saves the splits in cv_splits folder as fold{fold}_{split}_index.csv
         
         Args:
             k (int): Number of folds for cross-validation. Defaults to 4.
         """
-        from sklearn.model_selection import StratifiedKFold
-        
         print(f"Building {k}-fold cross-validation indices...")
         
         # Create cv_splits directory if it doesn't exist
         cv_splits_dir = os.path.join(self.root, "cv_splits")
         os.makedirs(cv_splits_dir, exist_ok=True)
         
-        # Load and clean data for each task
-        tasks = ['abnormal', 'acl', 'meniscus']
+        # Load all task data (same as build_index)
+        abnormal_train_df = pd.read_csv(os.path.join(self.path_to_mrnet, "train-abnormal.csv"), header=None, names=["pnum", "abnormal"])
+        acl_train_df = pd.read_csv(os.path.join(self.path_to_mrnet, "train-acl.csv"), header=None, names=["pnum", "acl"])
+        meniscus_train_df = pd.read_csv(os.path.join(self.path_to_mrnet, "train-meniscus.csv"), header=None, names=["pnum", "meniscus"])
         
-        for task in tasks:
-            print(f"Building CV splits for {task} task...")
+        abnormal_valid_df = pd.read_csv(os.path.join(self.path_to_mrnet, "valid-abnormal.csv"), header=None, names=["pnum", "abnormal"])
+        acl_valid_df = pd.read_csv(os.path.join(self.path_to_mrnet, "valid-acl.csv"), header=None, names=["pnum", "acl"])
+        meniscus_valid_df = pd.read_csv(os.path.join(self.path_to_mrnet, "valid-meniscus.csv"), header=None, names=["pnum", "meniscus"])
+        
+        # Combine train and valid for each task
+        abnormal_combined = pd.concat([abnormal_train_df, abnormal_valid_df], ignore_index=True)
+        acl_combined = pd.concat([acl_train_df, acl_valid_df], ignore_index=True)
+        meniscus_combined = pd.concat([meniscus_train_df, meniscus_valid_df], ignore_index=True)
+        
+        # Merge all tasks on pnum (same as build_index)
+        combined_df = abnormal_combined.merge(acl_combined, on="pnum", how="outer").merge(meniscus_combined, on="pnum", how="outer")
+        combined_df = combined_df.dropna(subset=["abnormal"])  # Keep only rows with abnormal label
+        
+        # Ensure pnum is a string and 4 digits, padding as needed
+        combined_df['pnum'] = combined_df['pnum'].apply(lambda x: str(x).zfill(4))
+        
+        # Determine which directory (train or valid) each pnum belongs to
+        train_pnums = set(abnormal_train_df['pnum'].apply(lambda x: str(x).zfill(4)))
+        
+        # Initialize StratifiedKFold (stratify on abnormal label)
+        skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+        
+        # Get features (X) and labels (y) for stratification
+        X = combined_df.index.values
+        y = combined_df["abnormal"].values # Build index with balanced class distribution abnormal view
+        
+        # Generate and save splits
+        for fold, (train_idx, valid_idx) in enumerate(skf.split(X, y)):
+            # Create train and validation dataframes
+            train_df = combined_df.iloc[train_idx].reset_index(drop=True)
+            valid_df = combined_df.iloc[valid_idx].reset_index(drop=True)
             
-            # Load task-specific data
-            train_file = os.path.join(self.root, f"train-{task}.csv")
-            valid_file = os.path.join(self.root, f"valid-{task}.csv")
+            # Add view paths (determine directory based on original train/valid split)
+            for view in self.views:
+                train_df[view] = train_df['pnum'].apply(
+                    lambda x: os.path.join(self.root, "train" if x in train_pnums else "valid", view, f"{x}.npy")
+                )
+                valid_df[view] = valid_df['pnum'].apply(
+                    lambda x: os.path.join(self.root, "train" if x in train_pnums else "valid", view, f"{x}.npy")
+                )
             
-            if os.path.exists(train_file) and os.path.exists(valid_file):
-                train_df = pd.read_csv(train_file, header=None, names=["pnum", task])
-                valid_df = pd.read_csv(valid_file, header=None, names=["pnum", task])
-                
-                # Combine train and valid for CV
-                combined_df = pd.concat([train_df, valid_df], ignore_index=True)
-                combined_df = combined_df.dropna()
-                
-                # Initialize StratifiedKFold
-                skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
-                
-                # Get features (X) and labels (y)
-                X = combined_df.index.values
-                y = combined_df[task].values
-                
-                # Generate and save splits
-                for fold, (train_idx, valid_idx) in enumerate(skf.split(X, y)):
-                    # Create train and validation dataframes
-                    train_fold_df = combined_df.iloc[train_idx].reset_index()
-                    valid_fold_df = combined_df.iloc[valid_idx].reset_index()
-                    
-                    # Add view paths
-                    for view in self.views:
-                        train_fold_df[view] = train_fold_df['pnum'].apply(
-                            lambda x: os.path.join(self.root, "train" if x in train_df['pnum'].values else "valid", view, f"{x}.npy")
-                        )
-                        valid_fold_df[view] = valid_fold_df['pnum'].apply(
-                            lambda x: os.path.join(self.root, "train" if x in train_df['pnum'].values else "valid", view, f"{x}.npy")
-                        )
-                    
-                    # Save files
-                    train_path = os.path.join(cv_splits_dir, f"fold{fold}_{task}_train_index.csv")
-                    valid_path = os.path.join(cv_splits_dir, f"fold{fold}_{task}_valid_index.csv")
-                    
-                    print(f"Saving fold {fold} {task} train index to {train_path}")
-                    print(f"Saving fold {fold} {task} valid index to {valid_path}")
-                    
-                    # Save class distribution information
-                    train_dist = train_fold_df[task].value_counts().sort_index()
-                    valid_dist = valid_fold_df[task].value_counts().sort_index()
-                    print(f"\nFold {fold} {task} class distribution:")
-                    print(f"Train: {dict(train_dist)}")
-                    print(f"Valid: {dict(valid_dist)}\n")
-                    
-                    train_fold_df.to_csv(train_path, index=False)
-                    valid_fold_df.to_csv(valid_path, index=False)
+            # Save files
+            train_path = os.path.join(cv_splits_dir, f"fold{fold}_train_index.csv")
+            valid_path = os.path.join(cv_splits_dir, f"fold{fold}_valid_index.csv")
+            
+            print(f"Saving fold {fold} train index to {train_path}")
+            print(f"Saving fold {fold} valid index to {valid_path}")
+            
+            # Save class distribution information
+            train_dist = train_df["abnormal"].value_counts().sort_index()
+            valid_dist = valid_df["abnormal"].value_counts().sort_index()
+            print(f"\nFold {fold} class distribution (abnormal):")
+            print(f"Train: {dict(train_dist)}")
+            print(f"Valid: {dict(valid_dist)}\n")
+            
+            train_df.to_csv(train_path, index=False)
+            valid_df.to_csv(valid_path, index=False)
         
         print("Cross-validation splits created successfully\n")
 
-    def get_dataset(self, split: str = "train") -> MRNetBase:
-        if split == "train":
+    def get_dataset(self, split: str = "train", fold: int | None = None) -> MRNetBase:
+        """
+        Get dataset for the specified split.
+        
+        Args:
+            split (str): Either "train" or "valid". Defaults to "train".
+            fold (int, optional): If provided, uses cross-validation splits from cv_splits folder.
+                                 If None, uses standard train/valid splits from root directory.
+        
+        Returns:
+            MRNetBase: The dataset instance.
+        """
+        if fold is not None:
+            # Use CV splits
+            cv_splits_dir = os.path.join(self.root, "cv_splits")
+            index_file_path = os.path.join(cv_splits_dir, f"fold{fold}_{split}_index.csv")
+            
+            if not os.path.exists(index_file_path):
+                raise FileNotFoundError(
+                    f"CV split file not found: {index_file_path}. "
+                    f"Make sure to run build_index_cv() first."
+                )
+            
             d_mrnet = MRNetBase(
-                self.root, split="train", transforms_pytorch=self.transforms
-            )
-        elif split == "valid":
-            d_mrnet = MRNetBase(
-                self.root, split="valid", transforms_pytorch=self.transforms
+                self.root,
+                split=split,
+                transforms_pytorch=self.transforms,
+                index_file_path=index_file_path
             )
         else:
-            raise ValueError(f"Invalid split: {split}")
-        print(f"length of dataset {split}: {len(d_mrnet)}")
+            # Use standard splits
+            if split == "train":
+                d_mrnet = MRNetBase(
+                    self.root, split="train", transforms_pytorch=self.transforms
+                )
+            elif split == "valid":
+                d_mrnet = MRNetBase(
+                    self.root, split="valid", transforms_pytorch=self.transforms
+                )
+            else:
+                raise ValueError(f"Invalid split: {split}")
+        
+        print(f"length of dataset {split}" + (f" (fold {fold})" if fold is not None else "") + f": {len(d_mrnet)}")
         return d_mrnet
 
-    def check_dataset(self, idx: int = 1, split: str = "train") -> None:
-        # Get idx
-        instance = self.get_dataset(split=split)[idx]
+    def check_dataset(self, idx: int = 1, split: str = "train", fold: int | None = None) -> None:
+        """
+        Visualizes the three knee MRI views for the sample at index `idx` in the provided split/fold.
+        Processes the dict returned from __getitem__ properly (expects keys: 'img', 'lab', 'idx', 'pnum').
+        """
+        instance = self.get_dataset(split=split, fold=fold)[idx]
         
-        # Show all three views
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        views = ['axial', 'sagittal', 'coronal']
-        
-        for i, view in enumerate(views):
-            if view in instance:
-                # Denormalize the tensor for visualization
-                img_tensor = instance[view]
-                if img_tensor.dim() == 3 and img_tensor.shape[0] == 3:
-                    # RGB tensor: convert from (C, H, W) to (H, W, C)
-                    img_tensor = img_tensor.permute(1, 2, 0)
-                elif img_tensor.dim() == 3 and img_tensor.shape[0] == 1:
-                    # Grayscale tensor: squeeze to (H, W)
-                    img_tensor = img_tensor.squeeze(0)
-                
-                # For RGB, show as is; for grayscale, use gray colormap
-                if img_tensor.shape[-1] == 3:
-                    axes[i].imshow(img_tensor.numpy())
+        # "instance" is expected to be a dict from __getitem__, containing:
+        # 'img' -- the knee image corresponding to the selected view (probably just one view, e.g. 'axial')
+        # 'lab' -- label
+        # 'idx' -- index
+        # 'pnum' -- patient number
+
+        print(f"Entry idx: {instance.get('idx', idx)}, Patient #: {instance.get('pnum', None)}, Label: {instance.get('lab', None)}")
+
+        # Try to visualize all three views: need to load them if not already present.
+        # The dataset instance is tied to `self.training_view`; load others dynamically.
+        dataset = self.get_dataset(split=split, fold=fold)
+        # Use same row from index_file to get other views
+        if hasattr(dataset, "index_file"):
+            df_row = dataset.index_file.iloc[idx]
+            base_sample = dict(instance)  # copy to avoid mutating
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            views = ["axial", "sagittal", "coronal"]
+            for i, view in enumerate(views):
+                npy_path = df_row.get(view, None)
+                if (npy_path is not None) and (isinstance(npy_path, str)) and os.path.exists(npy_path):
+                    arr = np.load(npy_path)
+                    # Middle slice
+                    if arr.ndim == 3:
+                        arr = arr[len(arr) // 2]
+                    # Now arr should be 2D, convert and apply appropriate transforms for display
+                    img_disp = arr
+                    if arr.ndim == 2:
+                        # Use the dataset's transforms if possible
+                        if hasattr(dataset, '_transforms_pytorch') and dataset._transforms_pytorch is not None:
+                            transforms_func = dataset.transforms_pytorch
+                        else:
+                            transforms_func = None
+                        arr_input = arr
+                        # Some transforms expect a 3D stack for "manual", so mimic __getitem__ logic
+                        if hasattr(dataset, '_transforms_pytorch') and dataset._transforms_pytorch == "manual":
+                            # The transform expects a 2D slice as input
+                            img_disp = transforms_func(arr_input)
+                        elif hasattr(dataset, '_transforms_pytorch') and dataset._transforms_pytorch == "txrv":
+                            # txrv expects a 3D (stack) input
+                            arr_stack = arr_input[None, ...]  # shape (1, H, W)
+                            img_disp = transforms_func(arr_stack)
+                        else:
+                            img_disp = arr_input
+                        # Move to numpy for plt.imshow
+                        if torch.is_tensor(img_disp):
+                            if img_disp.ndim == 3 and img_disp.shape[0] in [1, 3]:
+                                # C,H,W to H,W,C
+                                img_disp = img_disp.permute(1, 2, 0).cpu().numpy()
+                            else:
+                                img_disp = img_disp.cpu().numpy()
+                        if img_disp.dtype != np.float32:
+                            img_disp = img_disp.astype(np.float32)
+                        # img_disp = (img_disp - img_disp.min()) / (img_disp.ptp() + 1e-5)
+                    axes[i].imshow(img_disp, cmap='gray' if img_disp.shape[-1] == 1 else None)
+                    axes[i].set_title(f"{view.capitalize()} view")
+                    axes[i].axis('off')
                 else:
-                    axes[i].imshow(img_tensor.numpy(), cmap='gray')
-                axes[i].set_title(f"{view.capitalize()} view")
-                axes[i].axis('off')
+                    axes[i].text(0.5, 0.5, f"No {view} data", ha='center', va='center', fontsize=14)
+                    axes[i].set_title(f"{view.capitalize()} view")
+                    axes[i].axis('off')
+            plt.tight_layout()
+            plt.show()
+        else:
+            # Fallback option: only show the loaded image tensor
+            img_tensor = instance.get("img", None)
+            if img_tensor is not None:
+                if img_tensor.dim() == 3 and img_tensor.shape[0] == 3:
+                    img_disp = img_tensor.permute(1, 2, 0).cpu().numpy()
+                    plt.imshow(img_disp)
+                elif img_tensor.dim() == 3 and img_tensor.shape[0] == 1:
+                    img_disp = img_tensor.squeeze(0).cpu().numpy()
+                    plt.imshow(img_disp, cmap='gray')
+                else:
+                    plt.imshow(img_tensor.cpu().numpy(), cmap='gray')
+                plt.title("Loaded image view")
+                plt.axis('off')
+                plt.show()
             else:
-                axes[i].text(0.5, 0.5, f"No {view} data", ha='center', va='center')
-                axes[i].set_title(f"{view.capitalize()} view")
-                axes[i].axis('off')
-        
-        plt.tight_layout()
-        plt.show()
-        
+                print("No image tensor found to display.")
+
         return instance
 
-    def get_dataloader(self, split: str = "train") -> torch.utils.data.DataLoader:
-        d_mrnet = self.get_dataset(split)
+    def get_dataloader(self, split: str = "train", fold: int | None = None) -> torch.utils.data.DataLoader:
+        """
+        Get dataloader for the specified split.
+        
+        Args:
+            split (str): Either "train" or "valid". Defaults to "train".
+            fold (int, optional): If provided, uses cross-validation splits from cv_splits folder.
+                                 If None, uses standard train/valid splits from root directory.
+        
+        Returns:
+            torch.utils.data.DataLoader: The dataloader instance.
+        """
+        d_mrnet = self.get_dataset(split, fold=fold)
         dataloader = torch.utils.data.DataLoader(
             d_mrnet,
             batch_size=self.batch_size,
@@ -300,8 +406,8 @@ class MRNet:
         )
         return dataloader
 
-    def check_dataloader(self, split: str = "train") -> None:
-        print(next(iter(self.get_dataloader(split))))
+    def check_dataloader(self, split: str = "train", fold: int | None = None) -> None:
+        print(next(iter(self.get_dataloader(split, fold=fold))))
 
     def calculate_loss(
         self, predictions: torch.Tensor, targets: torch.Tensor

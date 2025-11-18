@@ -4,7 +4,6 @@ from torchvision import transforms
 import pandas as pd
 import os
 from PIL import Image
-from custom_datasets.dataset_utils.input_spec import Input2dSpec
 from torchvision.datasets import VisionDataset
 from torchmetrics import AUROC
 from sklearn.model_selection import StratifiedKFold
@@ -30,18 +29,25 @@ class MessidorBase(VisionDataset):
         root: str,
         split: str = "train",
         transforms_pytorch: str | None | transforms.Compose = "default",
+        index_file_path: str | None = None,
     ):
         self._transforms_pytorch = transforms_pytorch
         assert self._transforms_pytorch is not None
         super().__init__(root, transform=self.transforms_pytorch)
 
         self.split = split
-        self.index_file = pd.read_csv(
-            os.path.join(self.root, f"{self.split}_index.csv")
-        )
+        if index_file_path is not None:
+            self.index_file = pd.read_csv(index_file_path)
+        else:
+            self.index_file = pd.read_csv(
+                os.path.join(self.root, f"{self.split}_index.csv")
+            )
 
     @property
     def transforms_pytorch(self) -> transforms.Compose:
+        """
+        
+        """
         if self._transforms_pytorch == "default":
             return transforms.Compose(
                 [
@@ -53,6 +59,17 @@ class MessidorBase(VisionDataset):
                     transforms.Normalize(
                         [0.2859, 0.1341, 0.0471], [0.3263, 0.1568, 0.0613]
                     ),
+                    transforms.Pad((0, 37, 0, 38)),
+                ]
+            )
+        if self._transforms_pytorch == "no_normalize":
+            return transforms.Compose(
+                [
+                    transforms.Lambda(lambda img: img.convert("RGB")),
+                    transforms.Resize(
+                        self.input_size[0] - 1, max_size=self.input_size[0]
+                    ),
+                    transforms.ToTensor(),
                     transforms.Pad((0, 37, 0, 38)),
                 ]
             )
@@ -209,23 +226,54 @@ class Messidor:
         
         print("Cross-validation splits created successfully\n")
 
-    def get_dataset(self, split: str = "train") -> MessidorBase:
-        if split == "train":
+    def get_dataset(self, split: str = "train", fold: int | None = None) -> MessidorBase:
+        """
+        Get dataset for the specified split.
+        
+        Args:
+            split (str): Either "train" or "valid". Defaults to "train".
+            fold (int, optional): If provided, uses cross-validation splits from cv_splits folder.
+                                 If None, uses standard train/valid splits from root directory.
+        
+        Returns:
+            MessidorBase: The dataset instance.
+        """
+        if fold is not None:
+            # Use CV splits
+            cv_splits_dir = os.path.join(self.root, "cv_splits")
+            index_file_path = os.path.join(cv_splits_dir, f"fold{fold}_{split}_index.csv")
+            
+            if not os.path.exists(index_file_path):
+                raise FileNotFoundError(
+                    f"CV split file not found: {index_file_path}. "
+                    f"Make sure to run build_index_cv() first."
+                )
+            
             d_messidor = MessidorBase(
-                self.root, split="train", transforms_pytorch=self.transforms
-            )
-        elif split == "valid":
-            d_messidor = MessidorBase(
-                self.root, split="valid", transforms_pytorch=self.transforms
+                self.root, 
+                split=split, 
+                transforms_pytorch=self.transforms,
+                index_file_path=index_file_path
             )
         else:
-            raise ValueError(f"Invalid split: {split}")
-        print(f"length of dataset {split}: {len(d_messidor)}")
+            # Use standard splits
+            if split == "train":
+                d_messidor = MessidorBase(
+                    self.root, split="train", transforms_pytorch=self.transforms
+                )
+            elif split == "valid":
+                d_messidor = MessidorBase(
+                    self.root, split="valid", transforms_pytorch=self.transforms
+                )
+            else:
+                raise ValueError(f"Invalid split: {split}")
+        
+        print(f"length of dataset {split}" + (f" (fold {fold})" if fold is not None else "") + f": {len(d_messidor)}")
         return d_messidor
 
-    def check_dataset(self, idx: int = 1, split: str = "train") -> None:
+    def check_dataset(self, idx: int = 1, split: str = "train", fold: int | None = None) -> None:
         # Get idx
-        instance = self.get_dataset(split=split)[idx]
+        instance = self.get_dataset(split=split, fold=fold)[idx]
         # Print labels
         print(f"labels: {instance['lab']}")
         try:
@@ -235,8 +283,19 @@ class Messidor:
             # Transpose dimensions if necessary
             plt.imshow(instance["img"].transpose(2, 0))
 
-    def get_dataloader(self, split: str = "train") -> torch.utils.data.DataLoader:
-        d_messidor = self.get_dataset(split)
+    def get_dataloader(self, split: str = "train", fold: int | None = None) -> torch.utils.data.DataLoader:
+        """
+        Get dataloader for the specified split.
+        
+        Args:
+            split (str): Either "train" or "valid". Defaults to "train".
+            fold (int, optional): If provided, uses cross-validation splits from cv_splits folder.
+                                 If None, uses standard train/valid splits from root directory.
+        
+        Returns:
+            torch.utils.data.DataLoader: The dataloader instance.
+        """
+        d_messidor = self.get_dataset(split, fold=fold)
         dataloader = torch.utils.data.DataLoader(
             d_messidor,
             batch_size=self.batch_size,
@@ -245,8 +304,8 @@ class Messidor:
         )
         return dataloader
 
-    def check_dataloader(self, split: str = "train") -> None:
-        print(next(iter(self.get_dataloader(split))))
+    def check_dataloader(self, split: str = "train", fold: int | None = None) -> None:
+        print(next(iter(self.get_dataloader(split, fold=fold))))
 
     def calculate_loss(
         self, predictions: torch.Tensor, targets: torch.Tensor
